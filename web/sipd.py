@@ -93,6 +93,9 @@ DEFAULTS = {
     "movement_mode": "default",
     # warstwa projektowa
     "network_file": "",
+    # U2: True = pomija zamknięte pętle i osadza agentów tylko na największej składowej
+    # (domyślnie False = jak w PD.gaml: closest_to po wszystkich wierzchołkach)
+    "network_cleanup": False,
     "network_variant": "baseline",
     "edge_removal_fraction": 0.2,
     "shortcut_count": 20,
@@ -223,13 +226,18 @@ def _polyline_length(pts):
 
 
 class PathNetwork:
-    """Graf nieskierowany: wierzchołki = końce odcinków, krawędzie = polilinie."""
+    """Graf nieskierowany: wierzchołki = końce odcinków, krawędzie = polilinie.
 
-    def __init__(self, polylines, width, height, source):
+    drop_loops=False (jak as_edge_graph w GAMA): zamknięta polilinia (pierścień Polygon, zamknięty
+    LineString) zostawia wierzchołek bez krawędzi (w GAMA: pętla na jednym wierzchołku). Agent osadzony
+    tam stoi cały przebieg - w obu implementacjach. drop_loops=True pomija takie polilinie."""
+
+    def __init__(self, polylines, width, height, source, drop_loops=False):
         self.width = width
         self.height = height
         self.source = source
         self.polylines = polylines            # do rysowania (path_segment / park_boundary)
+        self.drop_loops = drop_loops
         self.vertices = []
         self.adj = {}                         # v -> {u: polilinia v..u (najkrótsza)}
         index = {}
@@ -244,6 +252,8 @@ class PathNetwork:
 
         for pl in polylines:
             if len(pl) < 2:
+                continue
+            if drop_loops and (round(pl[0][0], 6), round(pl[0][1], 6)) == (round(pl[-1][0], 6), round(pl[-1][1], 6)):
                 continue
             a, b = vid(pl[0]), vid(pl[-1])
             if a == b:
@@ -310,7 +320,8 @@ class PathNetwork:
         else:
             raise ModelError("Nieznany network_variant: %s" % kind)
         polylines = [adj[a][b] for a, b in self._edges(adj)]
-        return PathNetwork(polylines, self.width, self.height, self.source + "/" + kind)
+        return PathNetwork(polylines, self.width, self.height, self.source + "/" + kind,
+                           drop_loops=getattr(self, "drop_loops", False))
 
     def stats(self, path_sources=100):
         """Węzły, krawędzie, średni stopień, średnia najkrótsza ścieżka (kroki, z pierwszych węzłów),
@@ -369,16 +380,38 @@ class PathNetwork:
         self._stats = (path_sources, st)
         return st
 
-    def closest_vertex(self, pt):
-        if not self.vertices:
+    def largest_component(self):
+        """Wierzchołki największej składowej (bez wierzchołków bez krawędzi), w kolejności indeksów."""
+        if getattr(self, "_largest", None) is None:
+            seen, best = set(), []
+            for v in sorted(self.adj):
+                if v in seen or not self.adj[v]:
+                    continue
+                comp, stack = [v], [v]
+                seen.add(v)
+                while stack:
+                    x = stack.pop()
+                    for y in self.adj[x]:
+                        if y not in seen:
+                            seen.add(y)
+                            comp.append(y)
+                            stack.append(y)
+                if len(comp) > len(best):
+                    best = comp
+            self._largest = sorted(best)
+        return self._largest
+
+    def closest_vertex(self, pt, largest_only=False):
+        cand = self.largest_component() if largest_only else range(len(self.vertices))
+        if not self.vertices or not cand:
             return None
-        return min(range(len(self.vertices)), key=lambda i: _dist(self.vertices[i], pt))
+        return min(cand, key=lambda i: _dist(self.vertices[i], pt))
 
     def neighbors(self, v):
         return list(self.adj.get(v, {}).keys())
 
     @classmethod
-    def from_geojson(cls, data):
+    def from_geojson(cls, data, drop_loops=False):
         if isinstance(data, str):
             data = json.loads(data)
         lines = []
@@ -426,7 +459,7 @@ class PathNetwork:
         minx, maxy = min(xs), max(ys)
         # jak w GAMA: początek układu w rogu obwiedni, oś y w dół (północ u góry)
         lines = [[(x - minx, maxy - y) for x, y in ln] for ln in lines]
-        return cls(lines, max(xs) - minx, maxy - min(ys), "geojson")
+        return cls(lines, max(xs) - minx, maxy - min(ys), "geojson", drop_loops=drop_loops)
 
     @classmethod
     def synthetic(cls, seed=12345, n=10, spacing=60.0):
@@ -920,7 +953,7 @@ class Player:
     # --- ruch ------------------------------------------------------------
     def init_on_network(self):
         net = self.model.network
-        self.current_node = net.closest_vertex(self.location)
+        self.current_node = net.closest_vertex(self.location, largest_only=self.model.p.network_cleanup)
         self.location = net.vertices[self.current_node]
 
     def social_score(self, candidate):
@@ -1095,7 +1128,7 @@ class Model:
             if network is not None:
                 self.network = network
             elif geojson is not None:
-                self.network = PathNetwork.from_geojson(geojson)
+                self.network = PathNetwork.from_geojson(geojson, drop_loops=P.network_cleanup)
             else:
                 self.network = PathNetwork.synthetic(n=P.synthetic_grid, spacing=P.synthetic_spacing)
             self.width, self.height = self.network.width, self.network.height
@@ -1745,7 +1778,8 @@ class BatchRun:
         exp_seed = seed if seed is not None else spec.get("seed")
         seeder = random.Random(exp_seed) if exp_seed is not None else random.Random()
         seeds = [seeder.randrange(2 ** 31) for _ in range(self.repeat)]   # keep_seed: te same dla kombinacji
-        self.network = network or (PathNetwork.from_geojson(geojson) if geojson else None)
+        self.network = network or (PathNetwork.from_geojson(
+            geojson, drop_loops=base.get("network_cleanup", False)) if geojson else None)
         self._networks = {}
         self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
@@ -2310,6 +2344,27 @@ def t_batch_collects_all_outputs():
     assert "compat_results.csv" in names and "encounter_cells.csv" in names
     assert len(b.compat_rows) == 3 and b.encounter_rows
     assert all(len(r) == len(CSV_HEADERS["encounter_cells.csv"]) for r in b.encounter_rows)
+
+
+def t_network_cleanup():
+    # U2: odcinki głównej sieci + zamknięty pierścień (izolowany wierzchołek) + mała odłączona składowa
+    main = [[(x * 20.0, 50.0), (x * 20.0 + 20.0, 50.0)] for x in range(10)]
+    ring = [[(100.0, 10.0), (110.0, 10.0), (110.0, 20.0), (100.0, 10.0)]]
+    island = [[(10.0, 90.0), (20.0, 90.0)]]
+    polys = main + ring + island
+    raw = PathNetwork(polys, 200.0, 100.0, "test")
+    assert any(not raw.adj[v] for v in raw.adj)                      # pętla -> wierzchołek bez krawędzi
+    clean = PathNetwork(polys, 200.0, 100.0, "test", drop_loops=True)
+    assert all(clean.adj[v] for v in clean.adj)
+    assert len(clean.largest_component()) == 11
+    for net, cleanup in ((raw, False), (clean, True)):
+        m = Model(Params(nb_TFT=200, network_cleanup=cleanup, log_games=False), seed=5, network=net)
+        stuck = [p for p in m.players if not net.adj[p.current_node]]
+        on_island = [p for p in m.players if p.current_node not in net.largest_component()]
+        if cleanup:
+            assert not stuck and not on_island
+        else:
+            assert stuck and on_island                                  # zachowanie jak w PD.gaml
 
 
 def t_smoke_full_run():

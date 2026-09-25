@@ -192,6 +192,10 @@ global {
 	int shortcut_count <- 20;               // connected: liczba skrótów
 	float shortcut_max_length <- 100.0;     // connected: maks. długość skrótu (m)
 	int net_path_sources <- 100;            // średnia najkrótsza ścieżka liczona z tylu pierwszych węzłów
+	// U2: true = usuwa zamknięte odcinki (pętle) i osadza agentów tylko na największej składowej;
+	// false (domyślnie) = dotychczasowe zachowanie: closest_to po wszystkich wierzchołkach
+	bool network_cleanup <- false;
+	list<point> placement_vertices <- [];
 	int net_components_baseline <- 0;
 	// charakterystyka sieci (raz na przebieg)
 	int net_nodes <- 0;
@@ -206,6 +210,9 @@ global {
 	action setup_network() {
 		ask path_segment { do die; }
 		create path_segment from: park_paths_shapefile;
+		if network_cleanup {
+			ask path_segment where (first(each.shape.points) = last(each.shape.points)) { do die; }
+		}
 		path_network <- as_edge_graph(path_segment);
 		net_components_baseline <- length(connected_components_of(path_network));
 		if network_variant = "fragmented" {
@@ -214,6 +221,11 @@ global {
 			do add_shortcuts();
 		}
 		path_network <- as_edge_graph(path_segment);
+		placement_vertices <- list<point>(path_network.vertices);
+		if network_cleanup {
+			list<list> comps <- connected_components_of(path_network);
+			if !empty(comps) { placement_vertices <- list<point>(comps with_max_of (length(each))); }
+		}
 	}
 
 	// usuwa krawędzie w losowej kolejności, tylko takie, które nie zwiększają liczby składowych
@@ -1103,7 +1115,7 @@ species player skills: [moving] {
 	}
 
 	action init_on_network() {
-		current_node <- path_network.vertices closest_to self;
+		current_node <- (network_cleanup ? placement_vertices : path_network.vertices) closest_to self;
 		location <- current_node;
 	}
 
@@ -1585,6 +1597,7 @@ experiment PD type: gui {
 	parameter "Prędkość graczy (m/cykl)" var: player_speed min: 0.0 category: "Etap 1 – zgodność";
 	parameter "Wariant sieci" var: network_variant among: ["baseline", "fragmented", "connected"] category: "Warstwa projektowa";
 	parameter "Plik sieci ścieżek" var: network_file category: "Warstwa projektowa";
+	parameter "Czyszczenie sieci (pętle, największa składowa)" var: network_cleanup category: "Warstwa projektowa";
 	parameter "Udział usuwanych krawędzi (fragmented)" var: edge_removal_fraction min: 0.0 max: 0.9 category: "Warstwa projektowa";
 	parameter "Liczba skrótów (connected)" var: shortcut_count min: 0 category: "Warstwa projektowa";
 	parameter "Maks. długość skrótu (m)" var: shortcut_max_length min: 0.0 category: "Warstwa projektowa";
