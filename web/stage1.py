@@ -109,7 +109,15 @@ def run(args):
 
 def load(path):
     with open(path, encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+        raw = list(csv.DictReader(f))
+    # ten sam przebieg (konfiguracja + seed) z dwóch eksperymentów, np. PM2 baseline i PM3 baseline,
+    # liczy się raz - inaczej n się dubluje, a przedziały ufności są sztucznie wąskie
+    seen, rows = set(), []
+    for r in raw:
+        key = tuple((k, v) for k, v in sorted(r.items()) if k != "variant_name")
+        if key not in seen:
+            seen.add(key)
+            rows.append(r)
     for r in rows:
         for k, v in r.items():
             if v in ("True", "False", "true", "false"):
