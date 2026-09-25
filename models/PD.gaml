@@ -130,6 +130,65 @@ global {
 		nb_forgets_prev <- nb_forgets_total;
 	}
 
+	// --- Moduł 2: ewolucyjna zmiana strategii (imitacja Fermiego + mutacja) ---
+	bool evolution_on <- false;
+	int evolution_interval <- 100;   // co ile cykli
+	float fermi_k <- 0.5;            // szum selekcji K
+	float mutation_rate <- 0.0;
+	list<string> evolvable_characters <- ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"];
+	bool well_mixed <- false;        // kontrola: pary i modele losowane z całej populacji, bez przestrzeni
+	int nb_character_changes <- 0;
+
+	// szeregi czasowe udziałów charakterów (osobny CSV, wiersz = próbkowany cykl)
+	bool timeseries_export <- false;
+	int sample_interval <- 100;
+	int ts_prev_C <- 0;
+	int ts_prev_D <- 0;
+
+	float fermi_probability(float pi_model, float pi_self) {
+		float x <- -(pi_model - pi_self) / fermi_k;
+		if x > 50 { return 0.0; }
+		if x < -50 { return 1.0; }
+		return 1 / (1 + exp(x));
+	}
+
+	float share_of(string ch) {
+		return empty(player) ? 0.0 : length(player where (each.character = ch)) / length(player);
+	}
+
+	// aktualizacja synchroniczna: najpierw wszystkie decyzje na starych charakterach i π, potem zmiana;
+	// okno wypłat zerowane u wszystkich po aktualizacji
+	reflex evolve when: evolution_on and cycle > 0 and every(evolution_interval) {
+		do evolution_step();
+	}
+
+	action evolution_step() {
+		map<player, string> decisions <- map<player, string>([]);
+		loop p over: player where (each.character in evolvable_characters) {
+			decisions[p] <- p.evolution_choice(p.pick_model());
+		}
+		loop p over: decisions.keys {
+			string new_char <- decisions[p];
+			ask p { do change_character(new_char); }
+		}
+		ask player {
+			window_payoff <- 0.0;
+			window_games <- 0;
+		}
+	}
+
+	reflex export_timeseries when: timeseries_export and every(sample_interval) {
+		int d_c <- nb_moves_C - ts_prev_C;
+		int d_d <- nb_moves_D - ts_prev_D;
+		ts_prev_C <- nb_moves_C;
+		ts_prev_D <- nb_moves_D;
+		float d_share <- (d_c + d_d) = 0 ? 0.0 : d_d / (d_c + d_d);
+		save [variant_name, seed, cycle, share_of("TFT"), share_of("ALLC"), share_of("ALLD"), share_of("FTFT"),
+			share_of("TF2T"), share_of("GRIM"), share_of("WSLS"), share_of("QLEARN"), share_of("AQLEARN"),
+			d_share, nb_character_changes]
+			to: "../results/character_timeseries.csv" rewrite: false format: "csv" header: true;
+	}
+
 	bool payoffs_valid() {
 		if game_type = "PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P > payoff_S; }
 		if game_type = "weak_PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P = payoff_S; }
@@ -507,6 +566,12 @@ species game{
 		p1.nb_games <- p1.nb_games + 1;
 		p2.nb_games <- p2.nb_games + 1;
 
+		// Moduł 2: π = średnia wypłata na grę w bieżącym oknie ewolucji
+		p1.window_payoff <- p1.window_payoff + p1_payoff;
+		p1.window_games <- p1.window_games + 1;
+		p2.window_payoff <- p2.window_payoff + p2_payoff;
+		p2.window_games <- p2.window_games + 1;
+
 		if p1.character = "QLEARN" or p1.character = "AQLEARN"{
 			float payoff_of_p1 <- p1_payoff;
 			ask p1 {
@@ -557,6 +622,9 @@ species player skills: [moving] {
 	list<player> known_others;               // LRU: najdawniej widziany na początku
 	map<player, int> last_met_cycle;         // tylko metryka okna - nie jest pamięcią strategii
 	int nb_forgotten <- 0;
+	float window_payoff <- 0.0;              // Moduł 2: suma wypłat w bieżącym oknie
+	int window_games <- 0;
+	map<player, int> history_offset;         // Moduł 2: GRIM liczy historię od tego miejsca (przejęcie charakteru)
 	string character;
 	player enemy;
 	float forgiveness  <- 0.05;
@@ -590,6 +658,34 @@ species player skills: [moving] {
 			base_character <- base_character_qlearn;
 			character_strength <- character_strength_qlearn;
 		}
+	}
+
+	// Moduł 2: model do imitacji - losowy sąsiad w zasięgu widzenia (well_mixed: losowy agent populacji)
+	player pick_model() {
+		list<player> pool <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
+		return empty(pool) ? nil : one_of(pool);
+	}
+
+	// nowy charakter po kroku ewolucji (albo obecny); bez skutków ubocznych poza losowaniem
+	string evolution_choice(player model) {
+		if flip(mutation_rate) { return one_of(evolvable_characters); }
+		if model = nil or model = self or not (model.character in evolvable_characters) { return character; }
+		// π nieokreślone, gdy ktoś nie grał w oknie - brak imitacji
+		if window_games = 0 or model.window_games = 0 { return character; }
+		float pi_self <- window_payoff / window_games;
+		float pi_model <- model.window_payoff / model.window_games;
+		return flip(world.fermi_probability(pi_model, pi_self)) ? model.character : character;
+	}
+
+	// zmiana charakteru: pamięć partnerów zostaje, GRIM zaczyna liczyć zdrady od teraz
+	action change_character(string new_char) {
+		if new_char = character { return; }
+		character <- new_char;
+		do apply_character_params();
+		loop o over: lists_per_other.keys {
+			history_offset[o] <- length(lists_per_other[o]);
+		}
+		nb_character_changes <- nb_character_changes + 1;
 	}
 
 	action register_betrayal(environment_cell cell) {
@@ -648,7 +744,7 @@ species player skills: [moving] {
 		return rnd_choice(weights);
 	}
 
-	reflex choose_target when: real_env and (target_node = nil or location = target_node) {
+	reflex choose_target when: real_env and !well_mixed and (target_node = nil or location = target_node) {
 		list<point> neighbors <- list(path_network neighbors_of current_node);
 		if empty(neighbors) {
 			target_node <- current_node;
@@ -658,11 +754,11 @@ species player skills: [moving] {
 		}
 	}
 
-	reflex move_on_network when: real_env and target_node != nil and location != target_node {
+	reflex move_on_network when: real_env and !well_mixed and target_node != nil and location != target_node {
 		do goto (target:target_node, on:path_network, speed:move_speed);
 	}
 
-	reflex wander_fallback when: !real_env {
+	reflex wander_fallback when: !real_env and !well_mixed {
 		do wander(amplitude:90.0);
 	}
 
@@ -754,6 +850,7 @@ species player skills: [moving] {
 		remove key: other from: pending_state;
 		remove key: other from: pending_action;
 		remove key: other from: social_feedback;
+		remove key: other from: history_offset;
 		nb_forgotten <- nb_forgotten + 1;
 		nb_forgets_total <- nb_forgets_total + 1;
 	}
@@ -917,10 +1014,13 @@ species player skills: [moving] {
 	}
 
 	string GRIM(player p) {
-		if lists_per_other[p] contains "D"{
-			return "D";
+		int since <- (p in history_offset.keys) ? history_offset[p] : 0;
+		if since = 0 {
+			return (lists_per_other[p] contains "D") ? "D" : "C";
 		}
-		return "C";
+		// po przejęciu charakteru: tylko ruchy od przejęcia
+		list<string> h <- lists_per_other[p];
+		return (copy_between(h, since, length(h)) contains "D") ? "D" : "C";
 	}
 
 	string WSLS(player p) {
@@ -972,8 +1072,12 @@ species player skills: [moving] {
 	}
 
 	reflex do_you_wanna_play when: unlimited_games or height = 0 {
+		do try_play();
+	}
+
+	action try_play() {
 		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
-		list<player> nearby <- (player at_distance(vision_radius)) - [self];
+		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
 		if !empty(nearby) {
 			enemy <- one_of(nearby);
 
@@ -1071,6 +1175,14 @@ experiment PD type: gui {
 	parameter "Limit Dunbara (0 = brak)" var: dunbar_limit min: 0 category: "Moduł 1 – Dunbar";
 	parameter "Okno metryki partnerów (cykle)" var: partner_window min: 1 category: "Moduł 1 – Dunbar";
 
+	parameter "Ewolucja strategii" var: evolution_on category: "Moduł 2 – ewolucja";
+	parameter "Co ile cykli" var: evolution_interval min: 1 category: "Moduł 2 – ewolucja";
+	parameter "Szum selekcji K (Fermi)" var: fermi_k min: 0.001 category: "Moduł 2 – ewolucja";
+	parameter "Prawdopodobieństwo mutacji" var: mutation_rate min: 0.0 max: 1.0 category: "Moduł 2 – ewolucja";
+	parameter "Populacja dobrze wymieszana (bez przestrzeni)" var: well_mixed category: "Moduł 2 – ewolucja";
+	parameter "Eksport szeregów czasowych" var: timeseries_export category: "Diagnostyka";
+	parameter "Co ile cykli próbka" var: sample_interval min: 1 category: "Diagnostyka";
+
 	parameter "Pomiar czasu cyklu" var: perf_log category: "Diagnostyka";
 	parameter "Okno pomiaru (cykle)" var: perf_interval min: 1 category: "Diagnostyka";
 	parameter "Eksport odcisku regresyjnego" var: regression_export category: "Diagnostyka";
@@ -1090,6 +1202,13 @@ experiment PD type: gui {
 			chart "Score" type: series{
 				loop p_s over: player{
 					data "" + p_s + p_s.character + " score" value: p_s.for_chart;
+				}
+			}
+		}
+		display ewolucja type: 2d refresh: every(10 #cycle) {
+			chart "Udziały charakterów" type: series {
+				loop ch over: characters {
+					data ch value: world.share_of(ch);
 				}
 			}
 		}
@@ -1702,5 +1821,130 @@ experiment test_exploitation_counter type: test {
         create game(p1: ds[0], p2: ds[1], pair_key: "dd") number: 1;
         assert nb_exploitations = 1;
         assert abs(world.exploitation_rate() - 0.5) < 0.001;
+    }
+}
+
+experiment test_fermi_rule type: test {
+    test "Fermi: π_model >> π_self prawie zawsze imitacja; równe π - ok. 50%" {
+        fermi_k <- 0.5;
+        mutation_rate <- 0.0;
+        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 1 returns: me;
+        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 1 returns: rich;
+        create player(character: "TFT", window_payoff: 0.0, window_games: 10) number: 1 returns: equal;
+        player p <- first(me);
+
+        int adopt_rich <- 0;
+        int adopt_equal <- 0;
+        loop times: 1000 {
+            if p.evolution_choice(first(rich)) = "ALLD" { adopt_rich <- adopt_rich + 1; }
+            if p.evolution_choice(first(equal)) = "TFT" { adopt_equal <- adopt_equal + 1; }
+        }
+        assert adopt_rich > 990;
+        assert adopt_equal > 430 and adopt_equal < 570;
+        assert abs(world.fermi_probability(3.0, 3.0) - 0.5) < 0.001;
+    }
+
+    test "brak imitacji, gdy π nieokreślone albo model spoza evolvable_characters" {
+        mutation_rate <- 0.0;
+        create player(character: "ALLC", window_payoff: 0.0, window_games: 0) number: 1 returns: idle;
+        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 1 returns: rich;
+        create player(character: "QLEARN", window_payoff: 90.0, window_games: 10) number: 1 returns: learner;
+        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 1 returns: me;
+        loop times: 200 {
+            assert first(idle).evolution_choice(first(rich)) = "ALLC";
+            assert first(me).evolution_choice(first(learner)) = "ALLC";
+        }
+    }
+}
+
+experiment test_mutation_only_evolvable type: test {
+    test "mutacja zwraca tylko charaktery z evolvable_characters" {
+        mutation_rate <- 1.0;
+        evolvable_characters <- ["ALLC", "ALLD"];
+        create player(character: "ALLC") number: 1 returns: me;
+        bool outside <- false;
+        loop times: 500 {
+            if !(first(me).evolution_choice(nil) in ["ALLC", "ALLD"]) { outside <- true; }
+        }
+        assert not outside;
+    }
+}
+
+experiment test_grim_since_takeover type: test {
+    test "GRIM po przejęciu charakteru liczy zdrady tylko od przejęcia; pamięć partnera zostaje" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "TFT") number: 1 returns: me;
+        create player(character: "ALLD") number: 1 returns: opps;
+        player p <- first(me);
+        player opp <- first(opps);
+        create game(p1: p, p2: opp, pair_key: "g1") number: 1;   // opp zdradził
+        assert p.lists_per_other[opp] contains "D";
+
+        ask p { do change_character("GRIM"); }
+        assert p.character = "GRIM";
+        assert length(p.lists_per_other[opp]) = 1;   // historia zachowana
+        assert p.GRIM(opp) = "C";                     // stara zdrada nie liczy się
+
+        create game(p1: p, p2: opp, pair_key: "g2") number: 1;   // nowa zdrada po przejęciu
+        assert p.GRIM(opp) = "D";
+    }
+}
+
+experiment test_evolution_step type: test {
+    test "krok ewolucji: synchroniczny, zeruje okna, nie rusza QLEARN" {
+        evolution_on <- true;
+        well_mixed <- true;
+        fermi_k <- 0.01;
+        mutation_rate <- 0.0;
+        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 5;
+        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 5;
+        create player(character: "QLEARN", window_payoff: 0.0, window_games: 10) number: 1 returns: learners;
+
+        ask world { do evolution_step(); }
+
+        assert first(learners).character = "QLEARN";
+        assert empty(player where (each.window_games != 0));
+        assert length(player where (each.character = "ALLD")) >= 5;
+    }
+}
+
+experiment test_well_mixed_pairing type: test {
+    test "well_mixed: gra z agentem daleko poza zasięgiem widzenia" {
+        well_mixed <- true;
+        unlimited_games <- true;
+        log_games <- false;
+        vision_radius <- 1;
+        create player(character: "ALLC", location: {0, 0}) number: 1 returns: a;
+        create player(character: "ALLC", location: {world.shape.width, world.shape.height}) number: 1 returns: b;
+        ask first(a) { do try_play(); }
+        assert first(a).nb_games = 1;
+    }
+}
+
+experiment test_pending_action_sync_all_modules type: test {
+    test "pending_action zgodne z ruchem przy włączonych modułach 1-2 i rozbitej szybie" {
+        log_games <- false;
+        unlimited_games <- true;
+        dunbar_limit <- 2;
+        evolution_on <- true;
+        mutation_rate <- 0.3;
+        well_mixed <- true;
+        broken_windows_sensitivity <- 1.0;
+        create player(character: "QLEARN", epsilon: 0.0, initial_cooperation_bias: 1.0) number: 1 returns: learners;
+        create player(character: "ALLC") number: 3 returns: opps;
+        player a <- first(learners);
+        ask environment_cell { disorder <- 0.5; }
+
+        bool mismatch <- false;
+        loop i from: 1 to: 60 {
+            player opp <- opps[i mod 3];
+            create game(p1: a, p2: opp, pair_key: "g" + i) number: 1;
+            if a.pending_action[opp] != last(a.my_moves_per_other[opp]) { mismatch <- true; }
+            if i mod 10 = 0 { ask world { do evolution_step(); } }
+        }
+        assert not mismatch;
+        assert a.character = "QLEARN";
     }
 }

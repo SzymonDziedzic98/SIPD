@@ -210,6 +210,10 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <figcaption><h3>Pamięć partnerów (Dunbar)</h3></figcaption>
         <div class="chart-box"><canvas id="chartDunbar"></canvas></div>
       </figure>
+      <figure class="display">
+        <figcaption><h3>Udziały charakterów (ewolucja)</h3></figcaption>
+        <div class="chart-box"><canvas id="chartShares"></canvas></div>
+      </figure>
     </div>
     <div class="panel">
       <h2>Pliki wynikowe</h2>
@@ -277,11 +281,11 @@ const RESTART_KEYS = new Set(["real_env", "world_size", "grid_cols", "grid_rows"
   "nb_TFT", "nb_ALLC", "nb_ALLD", "nb_FTFT", "nb_TF2T", "nb_GRIM", "nb_WSLS", "game_type", "payoff_T",
   "payoff_R", "payoff_P", "payoff_S", "movement_sensitivity", "env_influence_qlearn",
   "social_sensitivity_aqlearn", "social_learning_boost_aqlearn", "base_character_qlearn",
-  "character_strength_qlearn", "synthetic_grid", "synthetic_spacing"]);
+  "character_strength_qlearn", "synthetic_grid", "synthetic_spacing", "well_mixed"]);
 
 let py = null, DEFAULTS = {}, GUI = [], EXPS = {};
 let running = false, snap = null, net = null, hasModel = false;
-let chartScore = null, chartDunbar = null;
+let chartScore = null, chartDunbar = null, chartShares = null;
 let batchStop = false;
 
 const $ = (id) => document.getElementById(id);
@@ -336,7 +340,8 @@ def _step(n):
     return M.snapshot()
 def _csv(name):
     src = {"PD.csv": M.game_log, "ablation_results.csv": M.ablation_rows,
-           "regression_fingerprint.csv": M.fingerprint_rows, "perf.csv": M.perf_rows}[name]
+           "regression_fingerprint.csv": M.fingerprint_rows, "perf.csv": M.perf_rows,
+           "character_timeseries.csv": M.timeseries_rows}[name]
     return sipd.to_csv(name, src)
 def _batch_csv(name):
     src = {"ablation_results.csv": B.ablation_rows, "regression_fingerprint.csv": B.fingerprint_rows}[name]
@@ -367,6 +372,8 @@ function inputFor(key) {
   } else if (key === "base_character_qlearn") {
     el = document.createElement("select");
     ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"].forEach((g) => el.add(new Option(g, g)));
+  } else if (Array.isArray(v)) {
+    el = document.createElement("input"); el.type = "text"; el.dataset.list = "1";
   } else if (typeof v === "boolean") {
     el = document.createElement("input"); el.type = "checkbox";
   } else if (typeof v === "number") {
@@ -382,10 +389,14 @@ function inputFor(key) {
   el.addEventListener("change", () => onParamChange(key));
   return el;
 }
-function setInput(el, v) { if (el.type === "checkbox") el.checked = !!v; else el.value = v; }
+function setInput(el, v) {
+  if (el.type === "checkbox") el.checked = !!v;
+  else el.value = Array.isArray(v) ? v.join(", ") : v;
+}
 function readInput(key) {
   const el = $("p_" + key), def = DEFAULTS[key];
   if (el.type === "checkbox") return el.checked;
+  if (Array.isArray(def)) return el.value.split(",").map((x) => x.trim()).filter(Boolean);
   if (typeof def === "number") {
     const n = el.dataset.int ? parseInt(el.value, 10) : parseFloat(el.value);
     return Number.isFinite(n) ? n : def;
@@ -564,6 +575,7 @@ function redraw() {
     ["gier", snap.nb_game],
     ["udział D", tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
     ["gier z wyzyskiem", (100 * snap.exploit).toFixed(1) + "%"],
+    ["zmian charakteru", snap.changes],
     ["znanych partnerów", snap.known.toFixed(2)],
     ["różnych w oknie", snap.distinct.toFixed(2)],
     ["zapomnień/cykl", snap.forgets],
@@ -611,6 +623,7 @@ function resetCharts() {
   lastChartCycle = -1;
   if (chartScore) chartScore.destroy();
   if (chartDunbar) chartDunbar.destroy();
+  if (chartShares) chartShares.destroy();
   if (typeof Chart === "undefined") return;
   chartScore = new Chart($("chartScore"), { type: "line", data: { datasets: [] }, options: chartOpts(false) });
   chartDunbar = new Chart($("chartDunbar"), { type: "line", data: { datasets: [
@@ -618,6 +631,8 @@ function resetCharts() {
     { label: "różni partnerzy w oknie", data: [], borderColor: css("--accent") },
     { label: "zapomnienia / cykl", data: [], borderColor: css("--bad") },
   ] }, options: chartOpts(true) });
+  chartShares = new Chart($("chartShares"), { type: "line", data: { datasets: Object.keys(COLORS).map((c) => (
+    { label: c, data: [], borderColor: COLORS[c] })) }, options: chartOpts(true) });
 }
 function updateCharts(first = false) {
   if (!chartScore || !snap) return;
@@ -632,7 +647,8 @@ function updateCharts(first = false) {
   d[0].data.push({ x: snap.cycle, y: snap.known });
   d[1].data.push({ x: snap.cycle, y: snap.distinct });
   d[2].data.push({ x: snap.cycle, y: snap.forgets });
-  chartScore.update("none"); chartDunbar.update("none");
+  chartShares.data.datasets.forEach((ds) => ds.data.push({ x: snap.cycle, y: snap.shares[ds.label] || 0 }));
+  chartScore.update("none"); chartDunbar.update("none"); chartShares.update("none");
 }
 
 // ---------- pobieranie CSV ----------
@@ -644,7 +660,7 @@ function download(name, text) {
 }
 function buildSimDownloads() {
   const box = $("simDownloads");
-  ["PD.csv", "ablation_results.csv", "regression_fingerprint.csv", "perf.csv"].forEach((n) => {
+  ["PD.csv", "ablation_results.csv", "regression_fingerprint.csv", "perf.csv", "character_timeseries.csv"].forEach((n) => {
     const b = document.createElement("button"); b.className = "btn"; b.textContent = n;
     b.addEventListener("click", () => { if (hasModel) download(n, py.globals.get("_csv")(n)); });
     box.append(b);

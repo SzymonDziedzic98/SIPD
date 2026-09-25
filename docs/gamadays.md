@@ -59,3 +59,24 @@ działają, 150 nie. Mieszanka 160 TFT (start od C) + 40 ALLD:
 
 Zapominanie zwiększa zysk oszustów (do +29%), a udział kooperacji prawie się nie zmienia; brak
 wyraźnego progu. Stąd decyzja 12.
+
+## Moduł 2 – ewolucja (implementacja)
+
+- Parametry: `evolution_on` (false), `evolution_interval` (100), `fermi_k` (0,5), `mutation_rate` (0),
+  `evolvable_characters` (7 klasycznych), `well_mixed` (false).
+- Co `evolution_interval` cykli **synchronicznie**: każdy gracz z `evolvable_characters` wybiera model
+  (losowy sąsiad w `vision_radius`; w `well_mixed` losowy agent populacji), z prawdopodobieństwem
+  `mutation_rate` bierze losowy charakter z listy, w przeciwnym razie przejmuje charakter modelu
+  z prawdopodobieństwem 1 / (1 + exp(−(π_model − π_self) / K)). Potem zmiana u wszystkich naraz
+  i wyzerowanie okien wypłat.
+- π = średnia wypłata na grę w bieżącym oknie. Gdy gracz lub model nie grał w oknie, π jest
+  nieokreślone i imitacji nie ma. Charakteru spoza `evolvable_characters` (np. QLEARN) się nie imituje.
+- Po zmianie charakteru pamięć partnerów zostaje; GRIM liczy zdrady od przejęcia (`history_offset`,
+  usuwany też przy zapomnieniu partnera).
+- `well_mixed`: pary losowane z całej populacji, ruch wyłączony.
+- Szeregi czasowe: `timeseries_export`, `sample_interval` → `results/character_timeseries.csv`
+  (udział każdego charakteru, udział D w oknie próbkowania, liczba zmian charakteru).
+- Pierwsza obserwacja (port Pythona, `well_mixed`, 105 agentów po 15 z każdej strategii klasycznej, PD,
+  10 000 cykli, 2 seedy): bez mutacji fiksacja (raz ALLD, raz GRIM + WSLS); z `mutation_rate` 0,01
+  ALLD ok. 0,97–0,98. W `well_mixed` para spotyka się ok. 2 razy na okno ewolucji, więc gra jest
+  prawie jednorazowa i przewaga ALLD jest oczekiwana. To wstępny sygnał dla P1, nie wynik etapu 1.

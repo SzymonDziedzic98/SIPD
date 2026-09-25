@@ -70,6 +70,14 @@ DEFAULTS = {
     "perf_interval": 100,
     "dunbar_limit": 0,
     "partner_window": 500,
+    "evolution_on": False,
+    "evolution_interval": 100,
+    "fermi_k": 0.5,
+    "mutation_rate": 0.0,
+    "evolvable_characters": ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"],
+    "well_mixed": False,
+    "timeseries_export": False,
+    "sample_interval": 100,
     "vision_radius": 10,
     "world_size": 10,
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
@@ -121,7 +129,17 @@ GUI_PARAMETERS = [
         ("dunbar_limit", "Limit Dunbara (0 = brak)"),
         ("partner_window", "Okno metryki partnerów (cykle)"),
     ]),
+    ("Moduł 2 – ewolucja", [
+        ("evolution_on", "Ewolucja strategii"),
+        ("evolution_interval", "Co ile cykli"),
+        ("fermi_k", "Szum selekcji K (Fermi)"),
+        ("mutation_rate", "Prawdopodobieństwo mutacji"),
+        ("evolvable_characters", "Charaktery podlegające ewolucji"),
+        ("well_mixed", "Populacja dobrze wymieszana (bez przestrzeni)"),
+    ]),
     ("Diagnostyka", [
+        ("timeseries_export", "Eksport szeregów czasowych"),
+        ("sample_interval", "Co ile cykli próbka"),
         ("perf_log", "Pomiar czasu cyklu"),
         ("perf_interval", "Okno pomiaru (cykle)"),
         ("regression_export", "Eksport odcisku regresyjnego"),
@@ -137,7 +155,7 @@ class ModelError(Exception):
 
 class Params:
     def __init__(self, **overrides):
-        self.__dict__.update(DEFAULTS)
+        self.__dict__.update({k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULTS.items()})
         for k, v in overrides.items():
             if k not in DEFAULTS:
                 raise KeyError("Nieznany parametr: " + k)
@@ -359,6 +377,12 @@ class Game:
         p1.nb_games += 1
         p2.nb_games += 1
 
+        # Moduł 2: π = średnia wypłata na grę w bieżącym oknie ewolucji
+        p1.window_payoff += p1_payoff
+        p1.window_games += 1
+        p2.window_payoff += p2_payoff
+        p2.window_games += 1
+
         if p1.character in LEARNERS:
             p1.update_q(p2, p1_payoff)
         if p2.character in LEARNERS:
@@ -392,6 +416,9 @@ class Player:
         self.known_others = []
         self.last_met_cycle = {}
         self.nb_forgotten = 0
+        self.window_payoff = 0.0
+        self.window_games = 0
+        self.history_offset = {}
         self.character = character
         self.enemy = None
         self.forgiveness = 0.05
@@ -483,7 +510,7 @@ class Player:
             self.known_others.remove(other)
         for mp in (self.lists_per_other, self.my_moves_per_other, self.q_c_per_other,
                    self.q_d_per_other, self.pending_state, self.pending_action,
-                   self.social_feedback):
+                   self.social_feedback, self.history_offset):
             mp.pop(other, None)
         self.nb_forgotten += 1
         self.model.nb_forgets_total += 1
@@ -493,6 +520,36 @@ class Player:
         for k in [k for k, c in self.last_met_cycle.items() if c < since]:
             del self.last_met_cycle[k]
         return len(self.last_met_cycle)
+
+    # --- Moduł 2: ewolucja -----------------------------------------------
+    def pick_model(self):
+        m = self.model
+        if m.p.well_mixed:
+            pool = [q for q in m.players if q is not self]
+        else:
+            pool = m.players_within(self, m.p.vision_radius)
+        return m.rng.choice(pool) if pool else None
+
+    def evolution_choice(self, model):
+        P = self.model.p
+        if self.flip(P.mutation_rate):
+            return self.model.rng.choice(P.evolvable_characters)
+        if model is None or model is self or model.character not in P.evolvable_characters:
+            return self.character
+        if self.window_games == 0 or model.window_games == 0:
+            return self.character
+        pi_self = self.window_payoff / self.window_games
+        pi_model = model.window_payoff / model.window_games
+        return model.character if self.flip(self.model.fermi_probability(pi_model, pi_self)) else self.character
+
+    def change_character(self, new_char):
+        if new_char == self.character:
+            return
+        self.character = new_char
+        self.apply_character_params()
+        for o, h in self.lists_per_other.items():
+            self.history_offset[o] = len(h)
+        self.model.nb_character_changes += 1
 
     # --- pamięć miejsc i relacji ----------------------------------------
     def register_betrayal(self, cell):
@@ -621,7 +678,9 @@ class Player:
         return "C" if h[-2:] != ["D", "D"] else "D"
 
     def GRIM(self, p):
-        return "D" if "D" in self.lists_per_other[p] else "C"
+        since = self.history_offset.get(p, 0)
+        h = self.lists_per_other[p]
+        return "D" if "D" in (h if since == 0 else h[since:]) else "C"
 
     def WSLS(self, p):
         h = self.lists_per_other[p]
@@ -738,7 +797,10 @@ class Player:
 
     def reflex_do_you_wanna_play(self):
         m, P = self.model, self.model.p
-        nearby = m.players_within(self, P.vision_radius)
+        if P.well_mixed:
+            nearby = [q for q in m.players if q is not self]
+        else:
+            nearby = m.players_within(self, P.vision_radius)
         if not nearby:
             return
         self.enemy = m.rng.choice(nearby)
@@ -752,11 +814,11 @@ class Player:
 
     def step(self):
         P = self.model.p
-        if P.real_env and (self.target_node is None or self._at_target()):
+        if P.real_env and not P.well_mixed and (self.target_node is None or self._at_target()):
             self.reflex_choose_target()
-        if P.real_env and self.target_node is not None and not self._at_target():
+        if P.real_env and not P.well_mixed and self.target_node is not None and not self._at_target():
             self.reflex_move_on_network()
-        if not P.real_env:
+        if not P.real_env and not P.well_mixed:
             self.reflex_wander()
         if not P.unlimited_games:
             self.reflex_height_decay()
@@ -782,6 +844,9 @@ class Model:
         self.nb_forgets_total = 0
         self.nb_forgets_prev = 0
         self.forgets_last_cycle = 0
+        self.nb_character_changes = 0
+        self.ts_prev_C = 0
+        self.ts_prev_D = 0
         self.perf_last_time = 0.0
         self.active_pairs = {}
         self.games = []
@@ -794,6 +859,7 @@ class Model:
         self.ablation_rows = []       # ablation_results.csv
         self.fingerprint_rows = []    # regression_fingerprint.csv
         self.perf_rows = []           # perf.csv
+        self.timeseries_rows = []     # character_timeseries.csv
 
         P = self.p
         if P.real_env:
@@ -974,6 +1040,35 @@ class Model:
         d = [_dist(aq[i].location, aq[j].location) for i in range(len(aq)) for j in range(i + 1, len(aq))]
         return sum(d) / len(d)
 
+    def fermi_probability(self, pi_model, pi_self):
+        x = -(pi_model - pi_self) / self.p.fermi_k
+        if x > 50:
+            return 0.0
+        if x < -50:
+            return 1.0
+        return 1 / (1 + math.exp(x))
+
+    def share_of(self, ch):
+        return sum(1 for p in self.players if p.character == ch) / len(self.players) if self.players else 0.0
+
+    def evolution_step(self):
+        # synchronicznie: decyzje na starych charakterach i π, potem zmiana; okna zerowane u wszystkich
+        evolvable = self.p.evolvable_characters
+        decisions = [(p, p.evolution_choice(p.pick_model())) for p in self.players if p.character in evolvable]
+        for p, new_char in decisions:
+            p.change_character(new_char)
+        for p in self.players:
+            p.window_payoff = 0.0
+            p.window_games = 0
+
+    def _reflex_export_timeseries(self):
+        d_c, d_d = self.nb_moves_C - self.ts_prev_C, self.nb_moves_D - self.ts_prev_D
+        self.ts_prev_C, self.ts_prev_D = self.nb_moves_C, self.nb_moves_D
+        d_share = 0.0 if d_c + d_d == 0 else d_d / (d_c + d_d)
+        self.timeseries_rows.append([self.p.variant_name, self.seed, self.cycle]
+                                    + [self.share_of(c) for c in TIMESERIES_CHARACTERS]
+                                    + [d_share, self.nb_character_changes])
+
     def exploitation_rate(self):
         return self.nb_exploitations / self.nb_game if self.nb_game else 0.0
 
@@ -1021,6 +1116,10 @@ class Model:
         # świat
         self.forgets_last_cycle = self.nb_forgets_total - self.nb_forgets_prev
         self.nb_forgets_prev = self.nb_forgets_total
+        if P.evolution_on and self.cycle > 0 and self.cycle % P.evolution_interval == 0:
+            self.evolution_step()
+        if P.timeseries_export and self.cycle % P.sample_interval == 0:
+            self._reflex_export_timeseries()
         if self.cycle == P.end_cycle:
             self._reflex_export_metrics()
         if P.regression_export and self.cycle == P.regression_cycle:
@@ -1083,6 +1182,8 @@ class Model:
             "summary": cells_summary, "personal": cells_personal, "disorder": cells_disorder,
             "nb_game": self.nb_game, "moves_C": self.nb_moves_C, "moves_D": self.nb_moves_D,
             "exploit": self.exploitation_rate(),
+            "shares": {c: self.share_of(c) for c in CHARACTERS},
+            "changes": self.nb_character_changes,
             "known": self.mean_known_partners(),
             "distinct": self.mean_distinct_partners_window(),
             "forgets": self.forgets_last_cycle,
@@ -1098,7 +1199,11 @@ class Model:
 # CSV
 # ---------------------------------------------------------------------------
 
+TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", "QLEARN", "AQLEARN"]
+
 CSV_HEADERS = {
+    "character_timeseries.csv": ["variant_name", "seed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
+                                + ["d_share_window", "nb_character_changes"],
     "PD.csv": ["nb_game", "cycle", "p1", "p2", "p1_move", "p2_move", "p1.score", "p2.score"],
     "ablation_results.csv": ["variant_name", "mean_score_all", "mean_for_QLEARN", "mean_for_AQLEARN",
                              "mean_for_classic", "aqlearn_clique_fraction", "aqlearn_avg_distance"],
@@ -1175,7 +1280,7 @@ class BatchRun:
             spacing=base.get("synthetic_spacing", DEFAULTS["synthetic_spacing"])))
         self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
-        self.ablation_rows, self.fingerprint_rows, self.perf_rows = [], [], []
+        self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
         self.done = 0
         self.current = None
 
@@ -1199,6 +1304,7 @@ class BatchRun:
                 self.ablation_rows += m.ablation_rows
                 self.fingerprint_rows += m.fingerprint_rows
                 self.perf_rows += m.perf_rows
+                self.timeseries_rows += m.timeseries_rows
                 self.done += 1
                 self.current = None
         return self.done >= len(self.jobs)
@@ -1517,6 +1623,84 @@ def t_exploitation_counter():
     _game(m, d1, d2, "dd")
     assert m.nb_exploitations == 1
     assert abs(m.exploitation_rate() - 0.5) < 1e-9
+
+
+def t_fermi_rule():
+    m = _test_model(fermi_k=0.5, mutation_rate=0.0)
+    me = m.create_player("ALLC", window_payoff=0.0, window_games=10)
+    rich = m.create_player("ALLD", window_payoff=90.0, window_games=10)
+    equal = m.create_player("TFT", window_payoff=0.0, window_games=10)
+    adopt_rich = sum(me.evolution_choice(rich) == "ALLD" for _ in range(1000))
+    adopt_equal = sum(me.evolution_choice(equal) == "TFT" for _ in range(1000))
+    assert adopt_rich > 990
+    assert 430 < adopt_equal < 570
+    assert abs(m.fermi_probability(3.0, 3.0) - 0.5) < 1e-9
+
+
+def t_no_imitation_undefined_or_not_evolvable():
+    m = _test_model(mutation_rate=0.0)
+    idle = m.create_player("ALLC", window_games=0)
+    rich = m.create_player("ALLD", window_payoff=90.0, window_games=10)
+    learner = m.create_player("QLEARN", window_payoff=90.0, window_games=10)
+    me = m.create_player("ALLC", window_games=10)
+    for _ in range(200):
+        assert idle.evolution_choice(rich) == "ALLC"
+        assert me.evolution_choice(learner) == "ALLC"
+
+
+def t_mutation_only_evolvable():
+    m = _test_model(mutation_rate=1.0, evolvable_characters=["ALLC", "ALLD"])
+    me = m.create_player("ALLC")
+    assert all(me.evolution_choice(None) in ("ALLC", "ALLD") for _ in range(500))
+
+
+def t_grim_since_takeover():
+    m = _test_model(log_games=False, unlimited_games=True, broken_windows_sensitivity=0.0)
+    p, opp = m.create_player("TFT"), m.create_player("ALLD")
+    _game(m, p, opp, "g1")
+    assert "D" in p.lists_per_other[opp]
+    p.change_character("GRIM")
+    assert p.character == "GRIM" and len(p.lists_per_other[opp]) == 1
+    assert p.GRIM(opp) == "C"
+    _game(m, p, opp, "g2")
+    assert p.GRIM(opp) == "D"
+
+
+def t_evolution_step():
+    m = _test_model(evolution_on=True, well_mixed=True, fermi_k=0.01, mutation_rate=0.0)
+    for _ in range(5):
+        m.create_player("ALLC", window_payoff=0.0, window_games=10)
+    for _ in range(5):
+        m.create_player("ALLD", window_payoff=90.0, window_games=10)
+    learner = m.create_player("QLEARN", window_games=10)
+    m.evolution_step()
+    assert learner.character == "QLEARN"
+    assert all(p.window_games == 0 for p in m.players)
+    assert sum(p.character == "ALLD" for p in m.players) >= 5
+
+
+def t_well_mixed_pairing():
+    m = _test_model(well_mixed=True, unlimited_games=True, log_games=False, vision_radius=1)
+    a = m.create_player("ALLC", _loc=(0.0, 0.0))
+    m.create_player("ALLC", _loc=(m.width, m.height))
+    a.reflex_do_you_wanna_play()
+    assert a.nb_games == 1
+
+
+def t_pending_action_sync_all_modules():
+    m = _test_model(log_games=False, unlimited_games=True, dunbar_limit=2, evolution_on=True,
+                    mutation_rate=0.3, well_mixed=True, broken_windows_sensitivity=1.0)
+    a = m.create_player("QLEARN", epsilon=0.0, initial_cooperation_bias=1.0)
+    opps = [m.create_player("ALLC") for _ in range(3)]
+    for c in m.cells:
+        c.disorder = 0.5
+    for i in range(1, 61):
+        opp = opps[i % 3]
+        _game(m, a, opp, "g%d" % i)
+        assert a.pending_action[opp] == a.my_moves_per_other[opp][-1]
+        if i % 10 == 0:
+            m.evolution_step()
+    assert a.character == "QLEARN"
 
 
 def t_smoke_full_run():
