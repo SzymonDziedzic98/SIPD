@@ -1789,6 +1789,13 @@ BATCH_EXPERIMENTS["PM4_heatmap"] = dict(
                 encounter_export=True, timeseries_export=False))
 
 
+# P3 i heatmapa przy prędkości 2 (przy 0,1 agent ma ok. 5 różnych partnerów - limit Dunbara nie działa)
+for _name in ("PM2_P3_space", "PM3_P3_network", "PM4_heatmap"):
+    _spec = BATCH_EXPERIMENTS[_name]
+    BATCH_EXPERIMENTS[_name + "_speed2"] = dict(_spec, params=dict(_spec["params"], player_speed=2.0,
+                                                                  variant_name=_name + "_speed2"))
+
+
 def park_grid_for(n_agents):
     """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
     return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))

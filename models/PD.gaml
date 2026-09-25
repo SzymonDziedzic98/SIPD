@@ -2041,6 +2041,72 @@ experiment PM4_heatmap type: batch repeat: 1 keep_seed: true until: cycle > end_
 	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
 }
 
+// P3 i heatmapa przy prędkości 2: przy 0,1 agent ma ok. 5 różnych partnerów, więc limit Dunbara nie działa
+experiment PM2_P3_space_speed2 type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM2_P3_space_speed2";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "network_variant" var: network_variant init: "baseline";
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 2.0;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "snowdrift"];
+}
+
+experiment PM3_P3_network_speed2 type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM3_P3_network_speed2";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 2.0;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "payoff_preset" var: payoff_preset init: "PD_classic";
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+}
+
+experiment PM4_heatmap_speed2 type: batch repeat: 1 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM4_heatmap_speed2";
+	parameter "prediction" var: prediction init: "heatmap";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "encounter_export" var: encounter_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "mutation_rate" var: mutation_rate init: 0.01;
+	parameter "payoff_preset" var: payoff_preset init: "PD_classic";
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 2.0;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+}
+
 // Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
 // regression_fingerprint.csv muszą być identyczne. Populacja celowo włącza wszystkie mechanizmy JASSS.
 experiment R0_regression type: batch repeat: 3 keep_seed: true until: cycle > regression_cycle {

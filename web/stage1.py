@@ -46,6 +46,7 @@ STAGE1 = ["S1_P12_space", "S1_P12_wellmixed", "S1_P1_mobility", "S1_P3_space", "
 STAGE2 = ["S2_pairs"]
 PLAN_MIN = ["PM2_P12_space", "PM2_P12_wellmixed", "PM2_P3_space", "PM2_P3_wellmixed", "PM3_P1_network",
             "PM3_P3_network", "PM4_heatmap"]
+PLAN_MIN_SPEED2 = ["PM2_P3_space_speed2", "PM3_P3_network_speed2", "PM4_heatmap_speed2"]
 FIX = 0.05
 
 
@@ -400,7 +401,7 @@ def verdict_stage2(rows):
 
 def main():
     ap = argparse.ArgumentParser(description="Etap 1: przebiegi i werdykty")
-    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN)
+    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN + PLAN_MIN_SPEED2)
     ap.add_argument("--N", nargs="*", type=int, default=[200, 500])
     ap.add_argument("--repeat", type=int, help="domyślnie: liczba powtórzeń z definicji eksperymentu")
     ap.add_argument("--end-cycle", type=int)

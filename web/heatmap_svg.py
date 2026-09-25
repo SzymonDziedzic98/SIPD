@@ -33,9 +33,9 @@ def color(v):
     return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
 
 
-def rebuild_network(variant, seed, n_agents=200):
+def rebuild_network(variant, seed, experiment="PM4_heatmap", n_agents=200):
     """Sieć użyta w przebiegu (park syntetyczny, ten sam seed -> ten sam wariant)."""
-    p = dict(sipd.BATCH_EXPERIMENTS["PM4_heatmap"]["params"], network_variant=variant,
+    p = dict(sipd.BATCH_EXPERIMENTS[experiment]["params"], network_variant=variant,
              synthetic_grid=sipd.park_grid_for(n_agents), compat_N=0)
     return sipd.Model(sipd.Params(**p), seed=seed).network
 
@@ -46,6 +46,9 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
     for r in rows:
         by_var[r["network_variant"]].append(r)
     variants = [v for v in VARIANTS if v in by_var] + sorted(set(by_var) - set(VARIANTS))
+    exp = rows[0]["variant_name"]
+    ep = sipd.BATCH_EXPERIMENTS.get(exp, sipd.BATCH_EXPERIMENTS["PM4_heatmap"])["params"]
+    speed = ("%g" % ep.get("player_speed", 2.0)).replace(".", ",")
     cols = rows_n = 50
     cell, pad, gap, head = 6, 24, 28, 58
     panel = cols * cell
@@ -56,9 +59,9 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
            '<rect width="100%%" height="100%%" fill="%s"/>' % SURFACE,
            '<text x="%d" y="24" font-size="15" font-weight="600" fill="%s">Stabilność spotkań: udział spotkań '
            'z partnerem pamiętanym</text>' % (pad, INK),
-           '<text x="%d" y="42" font-size="11.5" fill="%s">Komórka 50 × 50 siatki; cały przebieg (PM4_heatmap, '
-           'N = 200, PD, mutacja 0,01, prędkość 0,1). Szare kreski: ścieżki parku. Puste pola: brak gier.</text>'
-           % (pad, MUTED)]
+           '<text x="%d" y="42" font-size="11.5" fill="%s">Komórka 50 × 50 siatki; cały przebieg (%s, '
+           'N = 200, PD, mutacja 0,01, prędkość %s). Szare kreski: ścieżki parku. Puste pola: brak gier.</text>'
+           % (pad, MUTED, exp, speed)]
     for k, var in enumerate(variants):
         x0 = pad + k * (panel + gap)
         y0 = head + 18
@@ -79,7 +82,7 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
                                                     ("%.2f" % v).replace(".", ","),
                                                     r["total_games"]))
         try:
-            net = rebuild_network(var, int(float(rs[0]["seed"])))
+            net = rebuild_network(var, int(float(rs[0]["seed"])), exp if exp in sipd.BATCH_EXPERIMENTS else "PM4_heatmap")
             sx, sy = panel / net.width, panel / net.height
             d = " ".join("M" + " L".join("%.1f %.1f" % (x0 + x * sx, y0 + y * sy) for x, y in pl)
                          for pl in net.polylines)
