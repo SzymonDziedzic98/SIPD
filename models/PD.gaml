@@ -69,6 +69,7 @@ global {
 
 	int end_cycle <- 50000;
 	string variant_name <- "unset";
+	bool log_games <- true;  // zapis każdej gry do konsoli i PD.csv - wyłączane w batchach
 
 	int vision_radius <- 10;
 	int world_size <- 10;
@@ -246,16 +247,7 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 			loop i from: 0 to: length(character_pool) - 1 {
 				create player {
 					character <- character_pool[i];
-					sensitivity <- movement_sensitivity;
-					if character = "AQLEARN" {
-						social_sensitivity <- social_sensitivity_aqlearn;
-						social_learning_boost <- social_learning_boost_aqlearn;
-					}
-					if character = "QLEARN" or character = "AQLEARN" {
-						env_influence <- env_influence_qlearn;
-						base_character <- base_character_qlearn;
-						character_strength <- character_strength_qlearn;
-					}
+					do apply_character_params();
 					do setup_lists();
 					if real_env {
 						do init_on_network();
@@ -379,8 +371,8 @@ species game{
 			p1_payoff <- payoff_S;
 		}
 
-		if p1_move = "D" or p2_move = "D" {
-		    float bump <- (p1_move = "D" and p2_move = "D") ? disorder_bump_dd : disorder_bump_d;
+		float bump <- world.disorder_bump_for(p1_move, p2_move);
+		if bump > 0 {
 		    ask cell_p1 { disorder <- disorder + bump; }
 		    if cell_p2 != cell_p1 {
 		        ask cell_p2 { disorder <- disorder + bump; }
@@ -422,9 +414,11 @@ species game{
 //		p2 move: " + p2_move + ". p1 move: " + p1_move + ".
 //		p2 score: " + p2.score + ". p1 score: " + p1.score + ".";
 
-		write "" + nb_game + "," + cycle + "," + p1 + "," + p2 + "," + p1_move + "," + p2_move + "," + p1.score + "," + p2.score;
-        save [nb_game,cycle,p1,p2,p1_move,p2_move,p1.score,p2.score]
-        rewrite: false to: "../results/PD.csv" format: "csv" header: true;
+		if log_games {
+			write "" + nb_game + "," + cycle + "," + p1 + "," + p2 + "," + p1_move + "," + p2_move + "," + p1.score + "," + p2.score;
+			save [nb_game,cycle,p1,p2,p1_move,p2_move,p1.score,p2.score]
+				rewrite: false to: "../results/PD.csv" format: "csv" header: true;
+		}
     }
 
 
@@ -467,6 +461,20 @@ species player skills: [moving] {
 	string base_character <- "TFT";
 	float character_strength <- 0.0;
 	map<environment_cell, int> betrayal_count_at_location;
+
+	// parametry zależne od charakteru - wydzielone z global.init, żeby dało się je testować
+	action apply_character_params() {
+		sensitivity <- movement_sensitivity;
+		if character = "AQLEARN" {
+			social_sensitivity <- social_sensitivity_aqlearn;
+			social_learning_boost <- social_learning_boost_aqlearn;
+		}
+		if character = "QLEARN" or character = "AQLEARN" {
+			env_influence <- env_influence_qlearn;
+			base_character <- base_character_qlearn;
+			character_strength <- character_strength_qlearn;
+		}
+	}
 
 	action register_betrayal(environment_cell cell) {
 	    if cell = nil { return; }
@@ -602,6 +610,15 @@ species player skills: [moving] {
 		}
 	}
 
+	// nowy stan zawsze startuje z priorem initial_cooperation_bias - niezależnie od tego,
+	// czy pierwszy raz pojawia się w QLEARN, czy jako next_s w update_q
+	action ensure_q_state(player opponent, string s) {
+		if not (s in q_d_per_other[opponent].keys) {
+			q_d_per_other[opponent][s] <- (1 - initial_cooperation_bias);
+			q_c_per_other[opponent][s] <- initial_cooperation_bias;
+		}
+	}
+
 	action update_q(player opponent, int reward) {
 		string s <- pending_state[opponent];
 		string a <- pending_action[opponent];
@@ -609,10 +626,7 @@ species player skills: [moving] {
 		float old_q <- (a = "D") ? q_d_per_other[opponent][s] : q_c_per_other[opponent][s];
 
 		string next_s <- get_state(opponent);
-		if not (next_s in q_d_per_other[opponent].keys) {
-			q_d_per_other[opponent][next_s] <- 0.0;
-			q_c_per_other[opponent][next_s] <- 0.0;
-		}
+		do ensure_q_state(opponent, next_s);
 
 		float max_next_q <- max(q_d_per_other[opponent][next_s], q_c_per_other[opponent][next_s]);
 
@@ -765,11 +779,7 @@ species player skills: [moving] {
 
 	string QLEARN(player p) {
 		string s <- get_state(p);
-
-		if not (s in q_d_per_other[p].keys) {
-			q_d_per_other[p][s] <- (1 - initial_cooperation_bias);
-			q_c_per_other[p][s] <- initial_cooperation_bias;
-		}
+		do ensure_q_state(p, s);
 
 		environment_cell here <- environment_cell(location);
 		float env_fb <- (here != nil and here in personal_feedback.keys) ? personal_feedback[here] : 0.0;
@@ -780,8 +790,10 @@ species player skills: [moving] {
 		string action_chosen;
 		if flip(epsilon) {
 			action_chosen <- flip(0.5) ? "D" : "C";
+		} else if adjusted_q_d = adjusted_q_c {
+			action_chosen <- flip(0.5) ? "D" : "C";   // remis rozstrzygany losowo, nie na korzyść D
 		} else {
-			action_chosen <- (adjusted_q_d >= adjusted_q_c) ? "D" : "C";
+			action_chosen <- (adjusted_q_d > adjusted_q_c) ? "D" : "C";
 		}
 
 		if character_strength > 0 {
@@ -917,8 +929,9 @@ experiment PD type: gui {
 	}
 }
 
-experiment A_baseline type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment A_baseline type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
 	parameter "variant_name" var: variant_name init: "A_baseline";
+	parameter "log_games" var: log_games init: false;
 	parameter "Ilość agentów QLEARN" var: nb_QLEARN init: 20;
 	parameter "Ilość agentów AQLEARN" var: nb_AQLEARN init: 0;
 	parameter "movement_sensitivity" var: movement_sensitivity init: 0.0;
@@ -927,8 +940,9 @@ experiment A_baseline type: batch repeat: 30 until: cycle >= end_cycle keep_seed
 	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 0.0;
 }
 
-experiment B_env_movement type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment B_env_movement type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
 	parameter "variant_name" var: variant_name init: "B_env_movement";
+	parameter "log_games" var: log_games init: false;
 	parameter "Ilość agentów QLEARN" var: nb_QLEARN init: 20;
 	parameter "Ilość agentów AQLEARN" var: nb_AQLEARN init: 0;
 	parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
@@ -937,8 +951,9 @@ experiment B_env_movement type: batch repeat: 30 until: cycle >= end_cycle keep_
 	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 0.0;
 }
 
-experiment C_social_movement type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment C_social_movement type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
 	parameter "variant_name" var: variant_name init: "C_social_movement";
+	parameter "log_games" var: log_games init: false;
 	parameter "Ilość agentów QLEARN" var: nb_QLEARN init: 0;
 	parameter "Ilość agentów AQLEARN" var: nb_AQLEARN init: 20;
 	parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
@@ -947,8 +962,9 @@ experiment C_social_movement type: batch repeat: 30 until: cycle >= end_cycle ke
 	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 0.0;
 }
 
-experiment D_social_learning type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment D_social_learning type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
 	parameter "variant_name" var: variant_name init: "D_social_learning";
+	parameter "log_games" var: log_games init: false;
 	parameter "Ilość agentów QLEARN" var: nb_QLEARN init: 0;
 	parameter "Ilość agentów AQLEARN" var: nb_AQLEARN init: 20;
 	parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
@@ -957,26 +973,30 @@ experiment D_social_learning type: batch repeat: 30 until: cycle >= end_cycle ke
 	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 2.0;
 }
 
-experiment E1_classic_TFT type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment E1_classic_TFT type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
     parameter "variant_name" var: variant_name init: "E1_classic_TFT";
+    parameter "log_games" var: log_games init: false;
     parameter "Ilość agentów TFT" var: nb_TFT init: 20;
     parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
 }
 
-experiment E2_classic_WSLS type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment E2_classic_WSLS type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
     parameter "variant_name" var: variant_name init: "E2_classic_WSLS";
+    parameter "log_games" var: log_games init: false;
     parameter "Ilość agentów WSLS" var: nb_WSLS init: 20;
     parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
 }
 
-experiment E3_classic_GRIM type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment E3_classic_GRIM type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
     parameter "variant_name" var: variant_name init: "E3_classic_GRIM";
+    parameter "log_games" var: log_games init: false;
     parameter "Ilość agentów GRIM" var: nb_GRIM init: 20;
     parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
 }
 
-experiment F_broken_windows_anchor type: batch repeat: 30 until: cycle >= end_cycle keep_seed: false {
+experiment F_broken_windows_anchor type: batch repeat: 30 until: cycle > end_cycle keep_seed: false {
 	parameter "variant_name" var: variant_name init: "F_broken_windows_anchor";
+	parameter "log_games" var: log_games init: false;
 	parameter "Ilość agentów AQLEARN" var: nb_AQLEARN init: 20;
 	parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
 	parameter "social_sensitivity_aqlearn" var: social_sensitivity_aqlearn init: 1.5;
@@ -999,19 +1019,13 @@ experiment test_disorder_decay type: test {
 }
 
 experiment test_disorder_bump_asymmetry type: test {
-    test "D-D podbija disorder mocniej niż D-C" {
-        environment_cell cell_dd <- environment_cell(0);
-        environment_cell cell_dc <- environment_cell(1);
-        ask cell_dd { disorder <- 0.0; }
-        ask cell_dc { disorder <- 0.0; }
-
-        // symuluj bezpośrednio logikę bumpu (skopiowaną z game.init)
-        ask cell_dd { disorder <- disorder + disorder_bump_dd; }
-        ask cell_dc { disorder <- disorder + disorder_bump_d; }
-
-        assert cell_dd.disorder > cell_dc.disorder;
-        assert cell_dd.disorder = disorder_bump_dd;
-        assert cell_dc.disorder = disorder_bump_d;
+    test "D-D podbija disorder mocniej niż D-C, C-C nie podbija wcale" {
+        // disorder_bump_for jest tą samą funkcją, której używa game.init
+        assert world.disorder_bump_for("D", "D") = disorder_bump_dd;
+        assert world.disorder_bump_for("D", "C") = disorder_bump_d;
+        assert world.disorder_bump_for("C", "D") = disorder_bump_d;
+        assert world.disorder_bump_for("C", "C") = 0.0;
+        assert world.disorder_bump_for("D", "D") > world.disorder_bump_for("D", "C");
     }
 }
 
@@ -1135,8 +1149,13 @@ experiment test_pending_action_sync_broken_windows type: test {
 experiment test_anchor_not_applied_to_classic type: test {
     test "character_strength pozostaje 0.0 dla agentów klasycznych mimo globalnego parametru" {
         character_strength_qlearn <- 0.9;
-        create player(character: "TFT") number: 1;
-        assert first(player).character_strength = 0.0;
+        create player(character: "TFT") number: 1 returns: classic;
+        create player(character: "QLEARN") number: 1 returns: learners;
+        // ta sama akcja, którą wywołuje global.init
+        ask classic { do apply_character_params(); }
+        ask learners { do apply_character_params(); }
+        assert first(classic).character_strength = 0.0;
+        assert first(learners).character_strength = 0.9; // kontrola: parametr faktycznie trafia do QLEARN
     }
 }
 
@@ -1162,7 +1181,8 @@ experiment test_disorder_persists_not_just_noise type: test {
 experiment test_reputation_creates_self_fulfilling_bias type: test {
     test "RISKY zmienia zachowanie mimo dobrej historii z akurat tym przeciwnikiem" {
         generalization_threshold <- 3;
-        create player(character: "QLEARN", epsilon: 0.0) number: 2;
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, env_influence: 0.0) number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -1173,13 +1193,55 @@ experiment test_reputation_creates_self_fulfilling_bias type: test {
             p.my_moves_per_other[opp] <+ "C";
         }
 
-        assert p.get_state(opp) contains "SAFE";   // <- teraz faktycznie PRZED zepsuciem reputacji
+        // z tym przeciwnikiem w stanie C|C opłaca się kooperować,
+        // ale w "ryzykownym" miejscu agent nauczył się (na innych) defektować
+        ask p {
+            q_c_per_other[opp]["C|C|SAFE"] <- 5.0;
+            q_d_per_other[opp]["C|C|SAFE"] <- 1.0;
+            q_c_per_other[opp]["C|C|RISKY"] <- 0.0;
+            q_d_per_other[opp]["C|C|RISKY"] <- 3.0;
+        }
+
+        assert p.get_state(opp) = "C|C|SAFE";
+        assert p.QLEARN(opp) = "C";
 
         ask p { do register_betrayal(here); }
         ask p { do register_betrayal(here); }
         ask p { do register_betrayal(here); }
 
-        assert p.get_state(opp) contains "RISKY";
+        assert p.get_state(opp) = "C|C|RISKY";
+        assert p.QLEARN(opp) = "D"; // ta sama historia z opp, inna decyzja - przez reputację miejsca
+    }
+}
+
+experiment test_new_state_uses_cooperation_bias type: test {
+    test "stan odkryty w update_q dostaje prior initial_cooperation_bias, a nie 0/0" {
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, initial_cooperation_bias: 0.8) number: 2;
+        player p <- player[0];
+        player opp <- player[1];
+        ask p { do setup_lists(); }
+
+        string played <- p.QLEARN(opp); // stan START
+        p.lists_per_other[opp] <+ "C";
+        p.my_moves_per_other[opp] <+ played;
+        ask p { do update_q(opp, payoff_R); }
+
+        string next_s <- p.get_state(opp);
+        assert abs(p.q_c_per_other[opp][next_s] - 0.8) < 0.001;
+        assert abs(p.q_d_per_other[opp][next_s] - 0.2) < 0.001;
+    }
+
+    test "remis Q_D = Q_C rozstrzygany losowo, a nie zawsze na D" {
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, initial_cooperation_bias: 0.5) number: 2 returns: pair;
+        player p <- pair[0];
+        player opp <- pair[1];
+        ask p { do setup_lists(); }
+
+        int c_count <- 0;
+        loop times: 1000 { if p.QLEARN(opp) = "C" { c_count <- c_count + 1; } }
+        assert c_count > 400 and c_count < 600;
     }
 }
 
