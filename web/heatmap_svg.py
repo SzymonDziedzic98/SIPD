@@ -5,7 +5,9 @@ Z pliku encounter_cells.csv (PM4_heatmap) rysuje po jednym panelu na wariant sie
 powtórnych z partnerem pamiętanym (cały przebieg) w każdej komórce siatki, wspólna skala 0-1.
 Ścieżki parku są odtwarzane z portu (ten sam seed i wariant) - dotyczy sieci syntetycznej.
 
-    python web/heatmap_svg.py results/plan_min_encounter_cells.csv docs/heatmap_spotkan.svg
+    python web/heatmap_svg.py results/plan_min_encounter_cells.csv docs/heatmap_spotkan.svg [vmin]
+
+vmin (domyślnie 0): dolny koniec skali - np. 0.7, gdy wszystkie wartości są wysokie; opisany w legendzie.
 """
 import csv
 import os
@@ -22,8 +24,8 @@ SURFACE, INK, MUTED, GRID, PATH = "#fcfcfb", "#1f2328", "#5b6068", "#e6e5e1", "#
 VARIANTS = ["baseline", "fragmented", "connected"]
 
 
-def color(v):
-    v = min(1.0, max(0.0, v))
+def color(v, vmin=0.0):
+    v = min(1.0, max(0.0, (v - vmin) / (1.0 - vmin)))
     i = v * (len(RAMP) - 1)
     lo = int(i)
     hi = min(lo + 1, len(RAMP) - 1)
@@ -40,7 +42,7 @@ def rebuild_network(variant, seed, experiment="PM4_heatmap", n_agents=200):
     return sipd.Model(sipd.Params(**p), seed=seed).network
 
 
-def render(csv_path, out_path, metric="share_repeat_remembered"):
+def render(csv_path, out_path, metric="share_repeat_remembered", vmin=0.0):
     rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
     by_var = defaultdict(list)
     for r in rows:
@@ -78,7 +80,7 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
             c, rr = int(r["col"]), int(r["row"])
             v = float(r[metric])
             out.append('<rect x="%d" y="%d" width="%d" height="%d" fill="%s"><title>komórka (%d, %d): %s, '
-                       'gier %s</title></rect>' % (x0 + c * cell, y0 + rr * cell, cell, cell, color(v), c, rr,
+                       'gier %s</title></rect>' % (x0 + c * cell, y0 + rr * cell, cell, cell, color(v, vmin), c, rr,
                                                     ("%.2f" % v).replace(".", ","),
                                                     r["total_games"]))
         try:
@@ -96,9 +98,10 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
     out.append('<rect x="%d" y="%d" width="%d" height="10" rx="2" fill="url(#g)"/>' % (lx, ly, lw))
     for t in (0, 0.25, 0.5, 0.75, 1.0):
         out.append('<text x="%.1f" y="%d" font-size="10.5" fill="%s" text-anchor="middle">%s</text>'
-                   % (lx + t * lw, ly + 24, MUTED, ("%.2f" % t).replace(".", ",")))
-    out.append('<text x="%d" y="%d" font-size="11" fill="%s">udział spotkań powtórnych (pamiętany partner)</text>'
-               % (lx + lw + 16, ly + 9, INK))
+                   % (lx + t * lw, ly + 24, MUTED, ("%.2f" % (vmin + t * (1 - vmin))).replace(".", ",")))
+    out.append('<text x="%d" y="%d" font-size="11" fill="%s">udział spotkań powtórnych (pamiętany partner)%s</text>'
+               % (lx + lw + 16, ly + 9, INK, "" if vmin == 0 else "; skala od %s, niższe wartości = najjaśniejszy kolor"
+                  % ("%.2f" % vmin).replace(".", ",")))
     out.append("</svg>")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
@@ -106,4 +109,4 @@ def render(csv_path, out_path, metric="share_repeat_remembered"):
 
 
 if __name__ == "__main__":
-    print("warianty:", render(sys.argv[1], sys.argv[2]))
+    print("warianty:", render(sys.argv[1], sys.argv[2], vmin=float(sys.argv[3]) if len(sys.argv) > 3 else 0.0))

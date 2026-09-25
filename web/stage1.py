@@ -308,16 +308,18 @@ def classify(verdicts):
         return "nie odtworzono"
     if len(set(vals)) == 1:
         return "stała kandydacka (%s)" % vals[0]
+    # wymiar d wpływa na werdykt, gdy przy ustalonych pozostałych wymiarach zmiana d zmienia werdykt
+    names = ["układu przestrzeni", "macierzy wypłat", "mobilności (prędkość)"]
     deps = []
-    by_matrix, by_layout = {}, {}
-    for k, v in verdicts.items():
-        by_matrix.setdefault(k[1:], set()).add(v)
-        by_layout.setdefault((k[0],) + k[2:], set()).add(v)
-    if any(len(v) > 1 for v in by_matrix.values()):
-        deps.append("układu przestrzeni")
-    if any(len(v) > 1 for v in by_layout.values()):
-        deps.append("macierzy wypłat")
-    return "parametr kontekstowy (zależy od: %s)" % ", ".join(deps or ["kombinacji"])
+    for d in range(len(next(iter(verdicts)))):
+        groups = {}
+        for k, v in verdicts.items():
+            if k[0] == "well_mixed" and d == 2:
+                continue                                # prędkość nie ma znaczenia w well_mixed
+            groups.setdefault(k[:d] + k[d + 1:], set()).add(v)
+        if any(len(v) > 1 for v in groups.values()):
+            deps.append(names[d])
+    return "parametr kontekstowy (zależy od: %s)" % ", ".join(deps or ["kombinacji wymiarów"])
 
 
 def summary_table(rows):
