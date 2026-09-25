@@ -1576,7 +1576,7 @@ experiment PD type: gui {
 	parameter "Ilość agentów WSLS" var: nb_WSLS min: 0 category: "Ilości agentów";
 
 	parameter "Prawdziwe środowisko" var: real_env category: "Środowisko";
-	parameter "Ograniczenie rozgrywania gier" var: unlimited_games category: "Środowisko";
+	parameter "Gry bez ograniczeń (bez blokady height)" var: unlimited_games category: "Środowisko";
 	parameter "Rozmiar świata (działa przy sztucznym środowisku)" var: world_size min: 0 category: "Środowisko";
 	parameter "Kolumny siatki" var: grid_cols min: 0 category: "Środowisko";
 	parameter "Wiersze siatki" var: grid_rows min: 0 category: "Środowisko";

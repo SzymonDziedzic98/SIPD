@@ -32,7 +32,9 @@ import itertools
 import json
 import math
 import random
+import sys
 import time
+import zlib
 
 CHARACTERS = ["TFT", "QLEARN", "AQLEARN", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"]
 CLASSIC = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"]
@@ -93,6 +95,8 @@ DEFAULTS = {
     "movement_mode": "default",
     # warstwa projektowa
     "network_file": "",
+    # U8: układ współrzędnych GeoJSON: "auto" (heurystyka zakresu), "geographic" (lon/lat), "projected" (metry)
+    "geojson_crs": "auto",
     # U2: True = pomija zamknięte pętle i osadza agentów tylko na największej składowej
     # (domyślnie False = jak w PD.gaml: closest_to po wszystkich wierzchołkach)
     "network_cleanup": False,
@@ -134,7 +138,7 @@ GUI_PARAMETERS = [
     ]),
     ("Środowisko", [
         ("real_env", "Prawdziwe środowisko"),
-        ("unlimited_games", "Ograniczenie rozgrywania gier"),
+        ("unlimited_games", "Gry bez ograniczeń (bez blokady height)"),
         ("world_size", "Rozmiar świata (działa przy sztucznym środowisku)"),
         ("grid_cols", "Kolumny siatki"), ("grid_rows", "Wiersze siatki"),
         ("vision_radius", "Zasięg widzenia"),
@@ -421,7 +425,7 @@ class PathNetwork:
         return list(self.adj.get(v, {}).keys())
 
     @classmethod
-    def from_geojson(cls, data, drop_loops=False):
+    def from_geojson(cls, data, drop_loops=False, crs="auto"):
         if isinstance(data, str):
             data = json.loads(data)
         lines = []
@@ -457,7 +461,11 @@ class PathNetwork:
 
         xs = [p[0] for ln in lines for p in ln]
         ys = [p[1] for ln in lines for p in ln]
-        geographic = all(-180 <= x <= 180 for x in xs) and all(-90 <= y <= 90 for y in ys)
+        if crs not in ("auto", "geographic", "projected"):
+            raise ModelError("geojson_crs musi być auto, geographic albo projected: %s" % crs)
+        # "auto" myli lokalne układy metryczne o małych wartościach z lon/lat - wtedy podaj "projected"
+        geographic = crs == "geographic" or (crs == "auto" and all(-180 <= x <= 180 for x in xs)
+                                             and all(-90 <= y <= 90 for y in ys))
         if geographic:
             # lokalne odwzorowanie równoodległościowe -> metry (GAMA: automatycznie UTM)
             lat0 = math.radians((min(ys) + max(ys)) / 2)
@@ -1142,7 +1150,7 @@ class Model:
             if network is not None:
                 self.network = network
             elif geojson is not None:
-                self.network = PathNetwork.from_geojson(geojson, drop_loops=P.network_cleanup)
+                self.network = PathNetwork.from_geojson(geojson, drop_loops=P.network_cleanup, crs=P.geojson_crs)
             else:
                 self.network = PathNetwork.synthetic(n=P.synthetic_grid, spacing=P.synthetic_spacing)
             self.width, self.height = self.network.width, self.network.height
@@ -1789,8 +1797,11 @@ def park_grid_for(n_agents):
 class BatchRun:
     """Batch krok po kroku (żeby przeglądarka mogła pokazywać postęp)."""
 
-    def __init__(self, name, repeat=None, end_cycle=None, geojson=None, network=None, seed=None):
+    def __init__(self, name, repeat=None, end_cycle=None, geojson=None, network=None, seed=None, overrides=None):
         spec = BATCH_EXPERIMENTS[name]
+        for k in (overrides or {}):
+            if k not in DEFAULTS:
+                raise KeyError("Nieznany parametr: " + k)
         self.name = name
         self.repeat = repeat if repeat is not None else spec["repeat"]
         base = dict(spec["params"])
@@ -1802,10 +1813,13 @@ class BatchRun:
         exp_seed = seed if seed is not None else spec.get("seed")
         seeder = random.Random(exp_seed) if exp_seed is not None else random.Random()
         seeds = [seeder.randrange(2 ** 31) for _ in range(self.repeat)]   # keep_seed: te same dla kombinacji
+        base.update(overrides or {})
         self.network = network or (PathNetwork.from_geojson(
-            geojson, drop_loops=base.get("network_cleanup", False)) if geojson else None)
+            geojson, drop_loops=base.get("network_cleanup", False),
+            crs=base.get("geojson_crs", DEFAULTS["geojson_crs"])) if geojson else None)
         self._networks = {}
-        self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
+        # parametry z --set wygrywają także z kombinacjami among
+        self.jobs = [(dict(dict(base, **c), **(overrides or {})), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
         self.compat_rows, self.encounter_rows = [], []
@@ -1876,7 +1890,9 @@ def run_batch(name, **kw):
 
 def _test_model(**overrides):
     # jak test experiment w GAMA: global.init bez agentów (wszystkie nb_* = 0)
-    return Model(Params(**overrides), seed=random.randrange(2 ** 31))
+    # U8: stały seed wyprowadzony z nazwy testu - testy statystyczne są powtarzalne
+    name = sys._getframe(1).f_code.co_name
+    return Model(Params(**overrides), seed=zlib.crc32(name.encode("utf-8")))
 
 
 def _game(m, a, b, key):
@@ -2419,6 +2435,28 @@ def t_snowdrift_feedback_warning():
     assert not any("feedback" in w for w in pd.warnings)
 
 
+def t_geojson_crs():
+    # U8: mały lokalny układ metryczny - "auto" bierze go za lon/lat, "projected" zostawia metry
+    gj = {"type": "LineString", "coordinates": [[10.0, 20.0], [50.0, 20.0], [50.0, 60.0]]}
+    auto = PathNetwork.from_geojson(gj)
+    proj = PathNetwork.from_geojson(gj, crs="projected")
+    assert abs(proj.width - 40.0) < 1e-9 and abs(proj.height - 40.0) < 1e-9
+    assert auto.width > 1000                      # potraktowane jako stopnie -> tysiące km
+    try:
+        PathNetwork.from_geojson(gj, crs="utm")
+        assert False
+    except ModelError:
+        pass
+
+
+def t_batch_overrides():
+    # U8: --set nadpisuje parametry batcha (także te z among)
+    b = BatchRun("A_baseline", repeat=1, end_cycle=5, overrides={"nb_QLEARN": 3, "vision_radius": 55})
+    assert all(p["nb_QLEARN"] == 3 and p["vision_radius"] == 55 for p, _ in b.jobs)
+    b2 = BatchRun("R0_regression", repeat=1, end_cycle=5, overrides={"unlimited_games": True})
+    assert all(p["unlimited_games"] is True for p, _ in b2.jobs)
+
+
 def t_smoke_full_run():
     # nie ma odpowiednika w GAML: przebieg całego modelu na syntetycznej sieci bez błędów
     m = Model(Params(nb_QLEARN=4, nb_AQLEARN=4, nb_TFT=2, nb_ALLC=2, nb_ALLD=2, nb_FTFT=2, nb_TF2T=2,
@@ -2479,7 +2517,8 @@ def main(argv=None):
     ap.add_argument("--gui-demo", action="store_true", help="pojedynczy przebieg z parametrami --set")
     ap.add_argument("--cycles", type=int, default=1000)
     ap.add_argument("--seed", type=int)
-    ap.add_argument("--set", nargs="*", default=[], metavar="NAZWA=WARTOŚĆ")
+    ap.add_argument("--set", nargs="*", default=[], metavar="NAZWA=WARTOŚĆ",
+                    help="nadpisanie parametrów (--gui-demo i --experiment)")
     ap.add_argument("--out", default=".", help="katalog na pliki CSV")
     a = ap.parse_args(argv)
 
@@ -2502,7 +2541,9 @@ def main(argv=None):
         return 1 if failed else 0
     if a.experiment:
         t0 = time.time()
-        b = run_batch(a.experiment, repeat=a.repeat, end_cycle=a.end_cycle, geojson=geo, seed=a.seed)
+        overrides = {k: _parse_value(v) for k, v in (s.split("=", 1) for s in a.set)}
+        b = run_batch(a.experiment, repeat=a.repeat, end_cycle=a.end_cycle, geojson=geo, seed=a.seed,
+                      overrides=overrides)
         print("%s: %d przebiegów, %.1f s" % (a.experiment, b.total, time.time() - t0))
         for name, rows in batch_outputs(b):
             save(name, rows)
