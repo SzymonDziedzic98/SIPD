@@ -1750,7 +1750,7 @@ class BatchRun:
         self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
-        self.compat_rows = []
+        self.compat_rows, self.encounter_rows = [], []
         self.done = 0
         self.current = None
 
@@ -1783,6 +1783,7 @@ class BatchRun:
                 self.perf_rows += m.perf_rows
                 self.timeseries_rows += m.timeseries_rows
                 self.compat_rows += m.compat_rows
+                self.encounter_rows += m.encounter_rows
                 self.done += 1
                 self.current = None
         return self.done >= len(self.jobs)
@@ -1791,6 +1792,17 @@ class BatchRun:
         cur = self.current.cycle if self.current else 0
         limit = self.jobs[min(self.done, len(self.jobs) - 1)][0].get(self.until_key, DEFAULTS[self.until_key])
         return json.dumps({"done": self.done, "total": len(self.jobs), "cycle": cur, "limit": limit})
+
+
+# plik CSV -> atrybut z wierszami (BatchRun i Model)
+BATCH_OUTPUTS = [("ablation_results.csv", "ablation_rows"), ("regression_fingerprint.csv", "fingerprint_rows"),
+                 ("perf.csv", "perf_rows"), ("character_timeseries.csv", "timeseries_rows"),
+                 ("compat_results.csv", "compat_rows"), ("encounter_cells.csv", "encounter_rows")]
+
+
+def batch_outputs(b):
+    """Niepuste zestawy wierszy batcha: [(nazwa_pliku, wiersze)]."""
+    return [(name, getattr(b, attr)) for name, attr in BATCH_OUTPUTS if getattr(b, attr)]
 
 
 def run_batch(name, **kw):
@@ -2291,6 +2303,15 @@ def t_hooks_preserve_behaviour():
         pass
 
 
+def t_batch_collects_all_outputs():
+    # U1: BatchRun przenosi wszystkie wiersze, łącznie z encounter_rows (PM4_heatmap)
+    b = run_batch("PM4_heatmap", repeat=1, end_cycle=300)
+    names = [n for n, _ in batch_outputs(b)]
+    assert "compat_results.csv" in names and "encounter_cells.csv" in names
+    assert len(b.compat_rows) == 3 and b.encounter_rows
+    assert all(len(r) == len(CSV_HEADERS["encounter_cells.csv"]) for r in b.encounter_rows)
+
+
 def t_smoke_full_run():
     # nie ma odpowiednika w GAML: przebieg całego modelu na syntetycznej sieci bez błędów
     m = Model(Params(nb_QLEARN=4, nb_AQLEARN=4, nb_TFT=2, nb_ALLC=2, nb_ALLD=2, nb_FTFT=2, nb_TF2T=2,
@@ -2359,6 +2380,7 @@ def main(argv=None):
     import os
 
     def save(name, rows):
+        os.makedirs(a.out, exist_ok=True)
         path = os.path.join(a.out, name)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(to_csv(name, rows))
@@ -2375,10 +2397,8 @@ def main(argv=None):
         t0 = time.time()
         b = run_batch(a.experiment, repeat=a.repeat, end_cycle=a.end_cycle, geojson=geo, seed=a.seed)
         print("%s: %d przebiegów, %.1f s" % (a.experiment, b.total, time.time() - t0))
-        if b.ablation_rows:
-            save("ablation_results.csv", b.ablation_rows)
-        if b.fingerprint_rows:
-            save("regression_fingerprint.csv", b.fingerprint_rows)
+        for name, rows in batch_outputs(b):
+            save(name, rows)
         return 0
     if a.gui_demo:
         overrides = {k: _parse_value(v) for k, v in (s.split("=", 1) for s in a.set)}
