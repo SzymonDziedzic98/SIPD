@@ -1442,6 +1442,14 @@ BATCH_EXPERIMENTS["S1_P1_mobility"] = dict(
                 evolution_on=True, well_mixed=False, end_cycle=100000))
 
 
+BATCH_EXPERIMENTS["S2_pairs"] = dict(
+    repeat=15, until="end_cycle", seed=20261123,
+    among={"dunbar_limit": [0, 5, 15, 50], "mutation_rate": [0.0, 0.01],
+           "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"], "compat_N": [200]},
+    params=dict(_S1, variant_name="S2_pairs", prediction="S2", compat_mix="equal", evolution_on=True,
+                well_mixed=False, end_cycle=100000, player_speed=0.1))
+
+
 def park_grid_for(n_agents):
     """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
     return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))

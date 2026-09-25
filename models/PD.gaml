@@ -1589,6 +1589,30 @@ experiment S1_P3_wellmixed type: batch repeat: 15 keep_seed: true until: cycle >
 	parameter "compat_N" var: compat_N among: [200, 500];
 }
 
+// ===== Etap 2: zestawienia parami (P1+P3, P2+P3) w konfiguracji bazowej z etapu 1 =====
+// prędkość 0,1 (jedyna, przy której P1 odtwarza się dla PD i słabego PD), ewolucja, limit Dunbara.
+// P1+P2 wynika już z przebiegów S1_P1_mobility. Werdykty: web/stage1.py --verdict.
+experiment S2_pairs type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S2_pairs";
+	parameter "prediction" var: prediction init: "S2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 100000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+}
+
 // Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
 // regression_fingerprint.csv muszą być identyczne. Populacja celowo włącza wszystkie mechanizmy JASSS.
 experiment R0_regression type: batch repeat: 3 keep_seed: true until: cycle > regression_cycle {

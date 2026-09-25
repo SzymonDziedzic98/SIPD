@@ -18,6 +18,9 @@ Kryteria werdyktów (FIX = 0.05, zob. docs/gamadays.md):
   95% przedział ufności różnicy jest > 0. "tak" gdy istotny przy L=5 i średni zysk nie rośnie
   z L (5 >= 15 >= 50), "warunkowo" gdy istotny tylko częściowo, "nie" gdy nieistotny przy L=5.
   Próg = największy L z istotnym zyskiem. Raportowane też: czy limit działa (distinct > L).
+- Etap 2 (S2_pairs, ewolucja + limit): P1 i P2 jak wyżej, osobno dla każdego limitu. P3 w ewolucji =
+  udział ALLD przy limicie L większy niż bez limitu (95% CI różnicy > 0). Zgodność pary = obie
+  predykcje z pary utrzymują się przy tym samym limicie.
 """
 import argparse
 import csv
@@ -34,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sipd  # noqa: E402
 
 STAGE1 = ["S1_P12_space", "S1_P12_wellmixed", "S1_P1_mobility", "S1_P3_space", "S1_P3_wellmixed"]
+STAGE2 = ["S2_pairs"]
 FIX = 0.05
 
 
@@ -188,12 +192,69 @@ def verdict(path):
                 summary.append("- %s, %s, N=%d: **%s** (próg: %s)" % (
                     key[0], key[1], key[2], v, "limit ≤ %d" % thr if thr else "brak"))
         out += ["", "**P3 łącznie:**", ""] + summary + [""]
+    s2 = [r for r in rows if r["prediction"] == "S2"]
+    if s2:
+        out += verdict_stage2(s2)
     return "\n".join(out)
+
+
+def ci_diff(a, b):
+    d = st.mean(a) - st.mean(b)
+    se = math.sqrt(st.variance(a) / len(a) + st.variance(b) / len(b)) if len(a) > 1 and len(b) > 1 else float("nan")
+    return d, d - 1.96 * se, d + 1.96 * se
+
+
+def verdict_stage2(rows):
+    out = ["## Etap 2 – zestawienia parami (ewolucja + limit Dunbara)", "",
+           "| macierz | mutacja | limit | n | limit działa | ALLD | Δ ALLD vs brak limitu (95% CI) | udział D | ALLC | trend ALLD /10k | stabilizacja | P1 | P2 (część) | P3 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    pairs = []
+    keyf = lambda r: (r["payoff_preset"], r["mutation_rate"])
+    for key, grp in itertools.groupby(sorted(rows, key=keyf), key=keyf):
+        g = list(grp)
+        base = [r["share_ALLD"] for r in g if int(r["dunbar_limit"]) == 0]
+        for lim in sorted({int(r["dunbar_limit"]) for r in g}):
+            gl = [r for r in g if int(r["dunbar_limit"]) == lim]
+            n = len(gl)
+            ok1 = [FIX < r["share_ALLD"] < 1 - FIX and FIX < r["d_share"] < 1 - FIX and r["stabilized"] for r in gl]
+            v1 = share_verdict(sum(ok1) / n) if key[1] > 0 else "—"
+            if key[1] == 0:
+                v2 = share_verdict(sum(r["share_ALLC"] < 1.0 / r["compat_N"] for r in gl) / n)
+                p2 = "wymiera: " + v2
+            else:
+                frac = sum(r["share_ALLC"] > 0 for r in gl) / n
+                v2 = "tak" if frac >= 0.8 and st.mean(r["share_ALLC"] for r in gl) <= 0.2 else \
+                    ("nie" if frac <= 0.2 else "warunkowo")
+                p2 = "utrzymuje się: " + v2
+            if lim == 0:
+                dtxt, v3 = "—", "—"
+            else:
+                d, lo, hi = ci_diff([r["share_ALLD"] for r in gl], base)
+                dtxt = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi)
+                v3 = "tak" if lo > 0 else ("nie" if hi < 0 else "brak efektu")
+            works = "—" if lim == 0 else "%d%%" % round(100 * st.mean(r["exceeding_dunbar"] for r in gl))
+            out.append("| %s | %g | %d | %d | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s |" % (
+                key[0], key[1], lim, n, works, fmt([r["share_ALLD"] for r in gl]), dtxt,
+                fmt([r["d_share"] for r in gl]), fmt([r["share_ALLC"] for r in gl], 3),
+                fmt([r["alld_trend_10k"] for r in gl], 3),
+                round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, v3))
+            if lim > 0:
+                pairs.append((key, lim, v1, v2, v3))
+    out += ["", "**Zgodność par** (obie predykcje utrzymane przy danym limicie):", ""]
+    for (preset, mut), lim, v1, v2, v3 in pairs:
+        if mut > 0:
+            out.append("- %s, mutacja %g, limit %d: P1+P3 **%s** (P1 %s, P3 %s); P2 część: %s" % (
+                preset, mut, lim, "tak" if v1 == "tak" and v3 == "tak" else
+                ("nie" if "nie" in (v1, v3) else "warunkowo"), v1, v3, v2))
+        else:
+            out.append("- %s, bez mutacji, limit %d: P2 część (wymiera) %s; P3 %s" % (preset, lim, v2, v3))
+    out.append("")
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser(description="Etap 1: przebiegi i werdykty")
-    ap.add_argument("--experiments", nargs="*", default=STAGE1, choices=STAGE1)
+    ap.add_argument("--experiments", nargs="*", default=STAGE1, choices=STAGE1 + STAGE2)
     ap.add_argument("--N", nargs="*", type=int, default=[200, 500])
     ap.add_argument("--repeat", type=int, default=15)
     ap.add_argument("--end-cycle", type=int)
