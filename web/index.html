@@ -563,6 +563,7 @@ function redraw() {
     ["agentów", snap.players.length],
     ["gier", snap.nb_game],
     ["udział D", tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
+    ["gier z wyzyskiem", (100 * snap.exploit).toFixed(1) + "%"],
     ["znanych partnerów", snap.known.toFixed(2)],
     ["różnych w oknie", snap.distinct.toFixed(2)],
     ["zapomnień/cykl", snap.forgets],

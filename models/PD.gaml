@@ -43,6 +43,7 @@ global {
 	float disorder_bump_dd <- 0.15;   // obopólna, jawna defekcja - mocniejszy sygnał
 	float disorder_bump_d <- 0.08;    // pojedyncza defekcja
 	float disorder_decay <- 0.98;
+	bool disorder_clamp <- false;     // true: disorder ograniczony do [0, 1] (bez tego rośnie bez limitu)
 	int generalization_threshold <- 3;
 
 	string base_character_qlearn <- "TFT";
@@ -75,6 +76,7 @@ global {
 	// nic tu nie losuje i nie wpływa na dynamikę
 	int nb_moves_C <- 0;
 	int nb_moves_D <- 0;
+	int nb_exploitations <- 0;        // gry C-D: jedna strona wyzyskana (miara zysku oszustów, P3)
 	bool regression_export <- false;
 	int regression_cycle <- 2000;
 	bool perf_log <- false;
@@ -102,6 +104,11 @@ global {
 	int nb_forgets_total <- 0;
 	int nb_forgets_prev <- 0;
 	int forgets_last_cycle <- 0;  // zapomnienia w poprzednim cyklu (reflex świata biegnie przed graczami)
+
+	// udział gier C-D wśród wszystkich gier - do P3 (zysk oszustów przy zapominaniu)
+	float exploitation_rate() {
+		return nb_game = 0 ? 0.0 : nb_exploitations / nb_game;
+	}
 
 	float mean_known_partners() {
 		return empty(player) ? 0.0 : mean(player collect length(each.known_others));
@@ -470,13 +477,16 @@ species game{
 
 		// liczniki ruchów - odcisk regresyjny i udział defekcji
 		nb_moves_D <- nb_moves_D + (p1_move = "D" ? 1 : 0) + (p2_move = "D" ? 1 : 0);
+		if (p1_move = "D" and p2_move = "C") or (p1_move = "C" and p2_move = "D") {
+			nb_exploitations <- nb_exploitations + 1;
+		}
 		nb_moves_C <- nb_moves_C + (p1_move = "C" ? 1 : 0) + (p2_move = "C" ? 1 : 0);
 
 		float bump <- world.disorder_bump_for(p1_move, p2_move);
 		if bump > 0 {
-		    ask cell_p1 { disorder <- disorder + bump; }
+		    ask cell_p1 { disorder <- disorder_clamp ? min(1.0, disorder + bump) : disorder + bump; }
 		    if cell_p2 != cell_p1 {
-		        ask cell_p2 { disorder <- disorder + bump; }
+		        ask cell_p2 { disorder <- disorder_clamp ? min(1.0, disorder + bump) : disorder + bump; }
 		    }
 		}
 
@@ -927,6 +937,8 @@ species player skills: [moving] {
 		return (my_last = "C") ? "D" : "C";
 	}
 
+	// Uwaga: przy obecnej częstości spotkań (kilkanaście-kilkadziesiąt gier na parę) tablice Q per przeciwnik
+	// prawie nie odchodzą od prioru - zob. docs/gamadays.md, sekcja "Diagnostyka"
 	string QLEARN(player p) {
 		string s <- get_state(p);
 		do ensure_q_state(p, s);
@@ -1046,6 +1058,8 @@ experiment PD type: gui {
 	parameter "Wpływ środowiska na decyzję QLEARN" var: env_influence_qlearn category: "Środowisko";
 	parameter "Czułość społeczna AQLEARN" var: social_sensitivity_aqlearn category: "Środowisko";
 	parameter "Wzmocnienie uczenia społecznego AQLEARN" var: social_learning_boost_aqlearn category: "Środowisko";
+	parameter "Czułość na rozbitą szybę" var: broken_windows_sensitivity min: 0.0 category: "Środowisko";
+	parameter "Disorder ograniczony do [0, 1]" var: disorder_clamp category: "Środowisko";
 
 	parameter "Typ gry" var: game_type among: ["PD", "weak_PD", "snowdrift"] category: "Gra";
 	parameter "T (pokusa)" var: payoff_T category: "Gra";
@@ -1652,5 +1666,41 @@ experiment test_pending_action_sync_with_dunbar type: test {
         }
         assert not mismatch;
         assert a.nb_forgotten = 49;   // zmiana partnera co grę przy limicie 1
+    }
+}
+
+experiment test_disorder_clamp type: test {
+    test "disorder_clamp trzyma disorder w [0, 1]; wyłączony - bez limitu" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "ALLD") number: 2 returns: pair;
+        player a <- pair[0];
+        player b <- pair[1];
+        environment_cell cell_a <- environment_cell(a.location);
+
+        disorder_clamp <- true;
+        loop i from: 1 to: 20 { create game(p1: a, p2: b, pair_key: "c" + i) number: 1; }
+        assert cell_a.disorder <= 1.0;
+        assert cell_a.disorder = 1.0;   // 20 x 0.15 przekracza 1, więc dochodzi do sufitu
+
+        disorder_clamp <- false;
+        loop i from: 1 to: 20 { create game(p1: a, p2: b, pair_key: "u" + i) number: 1; }
+        assert cell_a.disorder > 1.0;
+    }
+}
+
+experiment test_exploitation_counter type: test {
+    test "nb_exploitations liczy tylko gry C-D" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "ALLC") number: 1 returns: cs;
+        create player(character: "ALLD") number: 2 returns: ds;
+        create game(p1: first(cs), p2: ds[0], pair_key: "cd") number: 1;
+        assert nb_exploitations = 1;
+        create game(p1: ds[0], p2: ds[1], pair_key: "dd") number: 1;
+        assert nb_exploitations = 1;
+        assert abs(world.exploitation_rate() - 0.5) < 0.001;
     }
 }

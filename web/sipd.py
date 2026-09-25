@@ -56,6 +56,7 @@ DEFAULTS = {
     "disorder_bump_dd": 0.15,
     "disorder_bump_d": 0.08,
     "disorder_decay": 0.98,
+    "disorder_clamp": False,
     "generalization_threshold": 3,
     "base_character_qlearn": "TFT",
     "character_strength_qlearn": 0.0,
@@ -107,6 +108,8 @@ GUI_PARAMETERS = [
         ("env_influence_qlearn", "Wpływ środowiska na decyzję QLEARN"),
         ("social_sensitivity_aqlearn", "Czułość społeczna AQLEARN"),
         ("social_learning_boost_aqlearn", "Wzmocnienie uczenia społecznego AQLEARN"),
+        ("broken_windows_sensitivity", "Czułość na rozbitą szybę"),
+        ("disorder_clamp", "Disorder ograniczony do [0, 1]"),
     ]),
     ("Gra", [
         ("game_type", "Typ gry"),
@@ -332,13 +335,14 @@ class Game:
 
         m.nb_moves_D += (p1_move == "D") + (p2_move == "D")
         m.nb_moves_C += (p1_move == "C") + (p2_move == "C")
+        if {p1_move, p2_move} == {"C", "D"}:
+            m.nb_exploitations += 1
 
         bump = m.disorder_bump_for(p1_move, p2_move)
         if bump > 0:
-            if cell_p1 is not None:
-                cell_p1.disorder += bump
-            if cell_p2 is not cell_p1 and cell_p2 is not None:
-                cell_p2.disorder += bump
+            for cell in ([cell_p1] + ([cell_p2] if cell_p2 is not cell_p1 else [])):
+                if cell is not None:
+                    cell.disorder = min(1.0, cell.disorder + bump) if P.disorder_clamp else cell.disorder + bump
 
         if P.unlimited_games:
             p2.score += p2_payoff
@@ -774,6 +778,7 @@ class Model:
         self.nb_game = 0
         self.nb_moves_C = 0
         self.nb_moves_D = 0
+        self.nb_exploitations = 0
         self.nb_forgets_total = 0
         self.nb_forgets_prev = 0
         self.forgets_last_cycle = 0
@@ -969,6 +974,9 @@ class Model:
         d = [_dist(aq[i].location, aq[j].location) for i in range(len(aq)) for j in range(i + 1, len(aq))]
         return sum(d) / len(d)
 
+    def exploitation_rate(self):
+        return self.nb_exploitations / self.nb_game if self.nb_game else 0.0
+
     def mean_known_partners(self):
         return sum(len(p.known_others) for p in self.players) / len(self.players) if self.players else 0.0
 
@@ -1074,6 +1082,7 @@ class Model:
             "players": players,
             "summary": cells_summary, "personal": cells_personal, "disorder": cells_disorder,
             "nb_game": self.nb_game, "moves_C": self.nb_moves_C, "moves_D": self.nb_moves_D,
+            "exploit": self.exploitation_rate(),
             "known": self.mean_known_partners(),
             "distinct": self.mean_distinct_partners_window(),
             "forgets": self.forgets_last_cycle,
@@ -1484,6 +1493,30 @@ def t_pending_action_sync_with_dunbar():
         assert a.pending_action[opp] == a.my_moves_per_other[opp][-1]
         assert len(a.known_others) == 1
     assert a.nb_forgotten == 49
+
+
+def t_disorder_clamp():
+    m = _test_model(log_games=False, unlimited_games=True, broken_windows_sensitivity=0.0)
+    a, b = m.create_player("ALLD"), m.create_player("ALLD")
+    cell_a = m.cell_at(a.location)
+    m.p.disorder_clamp = True
+    for i in range(20):
+        _game(m, a, b, "c%d" % i)
+    assert cell_a.disorder == 1.0
+    m.p.disorder_clamp = False
+    for i in range(20):
+        _game(m, a, b, "u%d" % i)
+    assert cell_a.disorder > 1.0
+
+
+def t_exploitation_counter():
+    m = _test_model(log_games=False, unlimited_games=True, broken_windows_sensitivity=0.0)
+    c, d1, d2 = m.create_player("ALLC"), m.create_player("ALLD"), m.create_player("ALLD")
+    _game(m, c, d1, "cd")
+    assert m.nb_exploitations == 1
+    _game(m, d1, d2, "dd")
+    assert m.nb_exploitations == 1
+    assert abs(m.exploitation_rate() - 0.5) < 1e-9
 
 
 def t_smoke_full_run():
