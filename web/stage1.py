@@ -10,7 +10,8 @@ w GAMA park jest stały (drogi.geojson), więc gęstość rośnie z N.
 
 Kryteria werdyktów (FIX = 0.05, zob. docs/gamadays.md):
 - P1: w przebiegu z ewolucją udział ALLD i udział D (ostatnie okno) leżą w (FIX, 1-FIX), a przebieg
-  się ustabilizował. "tak" gdy spełnia >= 80% powtórzeń, "nie" gdy <= 20%, inaczej "warunkowo".
+  się ustabilizował (średnie z okien 1000 cykli udziału ALLD i udziału D zmieniają się o < 0,02 przez
+  5 kolejnych okien po wygrzaniu 5000 cykli). "tak" gdy spełnia >= 80% powtórzeń, "nie" gdy <= 20%, inaczej "warunkowo".
 - P2: mutation_rate = 0 -> ALLC wymiera (udział < 1/N) w >= 80% powtórzeń; mutation_rate > 0 ->
   ALLC obecny (> 0) w >= 80% powtórzeń i średnio <= 0.2. "tak" gdy obie części, "warunkowo" gdy jedna.
 - P3: zysk oszustów = wypłata ALLD na grę przy limicie L minus przy braku limitu; istotny, gdy
@@ -32,7 +33,7 @@ from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sipd  # noqa: E402
 
-STAGE1 = ["S1_P12_space", "S1_P12_wellmixed", "S1_P3_space", "S1_P3_wellmixed"]
+STAGE1 = ["S1_P12_space", "S1_P12_wellmixed", "S1_P1_mobility", "S1_P3_space", "S1_P3_wellmixed"]
 FIX = 0.05
 
 
@@ -59,7 +60,7 @@ def run_job(job):
     params, seed = job
     m = sipd.Model(sipd.Params(**params), seed=seed)
     m.run(params["end_cycle"] + 1)   # until: cycle > end_cycle
-    return m.compat_rows
+    return m.compat_rows, m.timeseries_rows
 
 
 def run(args):
@@ -67,14 +68,19 @@ def run(args):
     jobs.sort(key=lambda j: -(j[0]["compat_N"] * (4 if j[0]["well_mixed"] else 1)))   # najdroższe najpierw
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     t0 = time.time()
-    with open(args.out, "w", newline="", encoding="utf-8") as f, Pool(args.workers) as pool:
-        w = csv.writer(f)
+    ts_out = args.ts_out or args.out.replace(".csv", "_timeseries.csv")
+    with open(args.out, "w", newline="", encoding="utf-8") as f, \
+            open(ts_out, "w", newline="", encoding="utf-8") as ft, Pool(args.workers) as pool:
+        w, wt = csv.writer(f), csv.writer(ft)
         w.writerow(sipd.COMPAT_HEADER)
-        for i, rows in enumerate(pool.imap_unordered(run_job, jobs), 1):
+        wt.writerow(sipd.CSV_HEADERS["character_timeseries.csv"])
+        for i, (rows, ts) in enumerate(pool.imap_unordered(run_job, jobs), 1):
             w.writerows(rows)
+            wt.writerows(ts)
             f.flush()
+            ft.flush()
             print("[%d/%d] %.0f s" % (i, len(jobs), time.time() - t0), flush=True)
-    print("zapisano", args.out)
+    print("zapisano", args.out, "i", ts_out)
 
 
 # ---------------------------------------------------------------------------
@@ -119,16 +125,17 @@ def verdict(path):
     p12 = [r for r in rows if r["prediction"] == "P1P2"]
     if p12:
         out += ["## P1 – oszuści stabilni w (0, 1), P2 – altruiści", "",
-                "| układ | macierz | N | mutacja | n | ALLD | udział D | ALLC | stabilizacja | P1 | P2 (część) |",
-                "|---|---|---|---|---|---|---|---|---|---|---|"]
+                "| układ | macierz | N | prędkość | mutacja | n | gier/partnera | ALLD | udział D | ALLC | stabilizacja | P1 | P2 (część) |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         p2_parts = {}
-        keyf = lambda r: (space(r), r["payoff_preset"], int(r["compat_N"]), r["mutation_rate"])
+        keyf = lambda r: (space(r), r["payoff_preset"], int(r["compat_N"]), r.get("player_speed", 2.0),
+                          r["mutation_rate"])
         for key, grp in itertools.groupby(sorted(p12, key=keyf), key=keyf):
             g = list(grp)
             n = len(g)
             ok1 = [FIX < r["share_ALLD"] < 1 - FIX and FIX < r["d_share"] < 1 - FIX and r["stabilized"] for r in g]
             v1 = share_verdict(sum(ok1) / n)
-            if key[3] == 0:
+            if key[4] == 0:
                 ok2 = [r["share_ALLC"] < 1.0 / r["compat_N"] for r in g]
                 v2 = share_verdict(sum(ok2) / n)
                 part = "wymiera: " + v2
@@ -137,15 +144,16 @@ def verdict(path):
                 v2 = "tak" if (sum(ok2) / n >= 0.8 and st.mean(r["share_ALLC"] for r in g) <= 0.2) else \
                     ("nie" if sum(ok2) / n <= 0.2 else "warunkowo")
                 part = "utrzymuje się: " + v2
-            p2_parts.setdefault(key[:3], []).append(v2)
-            out.append("| %s | %s | %d | %g | %d | %s | %s | %s | %d%% | %s | %s |" % (
-                key[0], key[1], key[2], key[3], n, fmt([r["share_ALLD"] for r in g]),
+            p2_parts.setdefault(key[:4], []).append(v2)
+            out.append("| %s | %s | %d | %g | %g | %d | %s | %s | %s | %s | %d%% | %s | %s |" % (
+                key[0], key[1], key[2], key[3], key[4], n, fmt([r["games_per_partner"] for r in g], 1),
+                fmt([r["share_ALLD"] for r in g]),
                 fmt([r["d_share"] for r in g]), fmt([r["share_ALLC"] for r in g], 3),
                 round(100 * sum(r["stabilized"] for r in g) / n), v1, part))
         out += ["", "**P2 łącznie** (obie części muszą się utrzymać):", ""]
         for key, parts in sorted(p2_parts.items()):
             v = "tak" if all(p == "tak" for p in parts) else ("nie" if all(p == "nie" for p in parts) else "warunkowo")
-            out.append("- %s, %s, N=%d: **%s**" % (key[0], key[1], key[2], v))
+            out.append("- %s, %s, N=%d, prędkość %g: **%s**" % (key[0], key[1], key[2], key[3], v))
         out.append("")
 
     p3 = [r for r in rows if r["prediction"] == "P3"]
@@ -190,6 +198,7 @@ def main():
     ap.add_argument("--end-cycle", type=int)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="compat_results.csv")
+    ap.add_argument("--ts-out", help="plik szeregów czasowych (domyślnie <out>_timeseries.csv)")
     ap.add_argument("--verdict", metavar="CSV", help="tylko policz werdykty z istniejącego pliku")
     a = ap.parse_args()
     if a.verdict:

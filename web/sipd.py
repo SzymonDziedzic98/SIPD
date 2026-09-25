@@ -86,7 +86,8 @@ DEFAULTS = {
     "compat_export": False,
     "warmup": 5000,
     "stab_window": 1000,
-    "stab_eps": 0.01,
+    "stab_eps": 0.02,
+    "player_speed": 2.0,
     "stab_k": 5,
     "vision_radius": 10,
     "world_size": 10,
@@ -153,6 +154,7 @@ GUI_PARAMETERS = [
         ("compat_mix", "Skład rdzenia"),
         ("payoff_preset", "Macierz wypłat"),
         ("compat_export", "Eksport compat_results.csv"),
+        ("player_speed", "Prędkość graczy (m/cykl)"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -496,6 +498,7 @@ class Player:
     def apply_character_params(self):
         P = self.model.p
         self.sensitivity = P.movement_sensitivity
+        self.move_speed = P.player_speed
         if self.character == "AQLEARN":
             self.social_sensitivity = P.social_sensitivity_aqlearn
             self.social_learning_boost = P.social_learning_boost_aqlearn
@@ -1139,7 +1142,8 @@ class Model:
         if self.stab_samples * P.sample_interval >= P.stab_window:
             mean_v = [x / self.stab_samples for x in self.stab_sum]
             if self.stab_prev:
-                change = max(abs(a - b) for a, b in zip(mean_v, self.stab_prev))
+                # stabilizacja oceniana na udziale ALLD (indeks 2) i udziale D (indeks 7)
+                change = max(abs(mean_v[i] - self.stab_prev[i]) for i in (2, 7))
                 self.stab_count = self.stab_count + 1 if change < P.stab_eps else 0
                 if self.stab_count >= P.stab_k and self.stabilized_at < 0:
                     self.stabilized_at = self.cycle
@@ -1156,9 +1160,10 @@ class Model:
         self.compat_rows.append([
             P.variant_name, P.prediction, self.seed, P.compat_N, P.well_mixed, P.payoff_preset,
             P.payoff_T, P.payoff_R, P.payoff_P, P.payoff_S, P.evolution_on, P.mutation_rate, P.fermi_k,
-            P.evolution_interval, P.dunbar_limit, P.vision_radius, P.end_cycle] + list(fin) + [
+            P.evolution_interval, P.dunbar_limit, P.vision_radius, P.player_speed, P.end_cycle] + list(fin) + [
             self.exploit_last_window, self.mean_for("ALLD") / 1000, self.mean_for("TFT") / 1000,
             self.mean_score_all() / 1000, self.mean_known_partners(), self.mean_distinct_partners_window(),
+            self.mean_games_per_partner(),
             self.share_exceeding_dunbar(), fixated, self.stab_count >= P.stab_k, self.stabilized_at,
             self.nb_character_changes])
 
@@ -1187,12 +1192,18 @@ class Model:
         d_c, d_d = self.nb_moves_C - self.ts_prev_C, self.nb_moves_D - self.ts_prev_D
         self.ts_prev_C, self.ts_prev_D = self.nb_moves_C, self.nb_moves_D
         d_share = 0.0 if d_c + d_d == 0 else d_d / (d_c + d_d)
-        self.timeseries_rows.append([self.p.variant_name, self.seed, self.cycle]
+        P = self.p
+        self.timeseries_rows.append([P.variant_name, self.seed, P.payoff_preset, P.compat_N, P.well_mixed,
+                                     P.mutation_rate, P.dunbar_limit, P.player_speed, self.cycle]
                                     + [self.share_of(c) for c in TIMESERIES_CHARACTERS]
                                     + [d_share, self.nb_character_changes])
 
     def exploitation_rate(self):
         return self.nb_exploitations / self.nb_game if self.nb_game else 0.0
+
+    def mean_games_per_partner(self):
+        g = [p for p in self.players if p.last_met_cycle]
+        return sum(p.nb_games / len(p.last_met_cycle) for p in g) / len(g) if g else 0.0
 
     def mean_known_partners(self):
         return sum(len(p.known_others) for p in self.players) / len(self.players) if self.players else 0.0
@@ -1329,15 +1340,16 @@ TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", 
 
 COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed", "payoff_preset",
                  "payoff_T", "payoff_R", "payoff_P", "payoff_S", "evolution_on", "mutation_rate", "fermi_k",
-                 "evolution_interval", "dunbar_limit", "vision_radius", "end_cycle",
+                 "evolution_interval", "dunbar_limit", "vision_radius", "player_speed", "end_cycle",
                  "share_TFT", "share_ALLC", "share_ALLD", "share_FTFT", "share_TF2T", "share_GRIM", "share_WSLS",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
-                 "distinct_partners", "exceeding_dunbar", "fixated", "stabilized", "stabilized_at",
+                 "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "stabilized_at",
                  "nb_character_changes"]
 
 CSV_HEADERS = {
     "compat_results.csv": COMPAT_HEADER,
-    "character_timeseries.csv": ["variant_name", "seed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
+    "character_timeseries.csv": ["variant_name", "seed", "payoff_preset", "compat_N", "well_mixed",
+                                 "mutation_rate", "dunbar_limit", "player_speed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
                                 + ["d_share_window", "nb_character_changes"],
     "PD.csv": ["nb_game", "cycle", "p1", "p2", "p1_move", "p2_move", "p1.score", "p2.score"],
     "ablation_results.csv": ["variant_name", "mean_score_all", "mean_for_QLEARN", "mean_for_AQLEARN",
@@ -1393,7 +1405,8 @@ BATCH_EXPERIMENTS = {
         social_learning_boost_aqlearn=2.0, broken_windows_sensitivity=0.4, character_strength_qlearn=0.6)),
 }
 
-_S1 = dict(log_games=False, compat_core=True, compat_export=True, end_cycle=20000, vision_radius=30,
+_S1 = dict(log_games=False, compat_core=True, compat_export=True, timeseries_export=True, end_cycle=20000,
+           vision_radius=30,
            partner_window=10 ** 9)
 for _space, _wm in (("space", False), ("wellmixed", True)):
     BATCH_EXPERIMENTS["S1_P12_" + _space] = dict(
@@ -1408,6 +1421,14 @@ for _space, _wm in (("space", False), ("wellmixed", True)):
                "compat_N": [200, 500]},
         params=dict(_S1, variant_name="S1_P3_" + _space, prediction="P3", compat_mix="tft_alld",
                     evolution_on=False, well_mixed=_wm))
+
+
+BATCH_EXPERIMENTS["S1_P1_mobility"] = dict(
+    repeat=15, until="end_cycle", seed=20261123,
+    among={"player_speed": [0.5, 0.1], "mutation_rate": [0.0, 0.01],
+           "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"], "compat_N": [200, 500]},
+    params=dict(_S1, variant_name="S1_P1_mobility", prediction="P1P2", compat_mix="equal",
+                evolution_on=True, well_mixed=False))
 
 
 def park_grid_for(n_agents):

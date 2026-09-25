@@ -110,6 +110,12 @@ global {
 		return nb_game = 0 ? 0.0 : nb_exploitations / nb_game;
 	}
 
+	// średnio gier na jednego różnego partnera (miara "iterowania" gry); wymaga dużego partner_window
+	float mean_games_per_partner() {
+		list<player> g <- player where (!empty(each.last_met_cycle));
+		return empty(g) ? 0.0 : mean(g collect (each.nb_games / length(each.last_met_cycle)));
+	}
+
 	float mean_known_partners() {
 		return empty(player) ? 0.0 : mean(player collect length(each.known_others));
 	}
@@ -186,7 +192,8 @@ global {
 	bool compat_export <- false;
 	int warmup <- 5000;               // cykle wygrzewania przed oceną stabilizacji
 	int stab_window <- 1000;          // okno średniej kroczącej udziałów
-	float stab_eps <- 0.01;           // maks. zmiana średnich między kolejnymi oknami
+	float stab_eps <- 0.02;           // maks. zmiana średnich (udział ALLD i udział D) między kolejnymi oknami
+	float player_speed <- 2.0;        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
 	int stab_k <- 5;                  // tyle kolejnych okien ze zmianą < eps = stabilizacja
 	list<string> classic_characters <- ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"];
 	// stan wykrywania stabilizacji (wektor = udziały 7 klasycznych + udział D w próbce)
@@ -270,7 +277,8 @@ global {
 				list<float> mean_v <- stab_sum collect (each / stab_samples);
 				if !empty(stab_prev) {
 					float change <- 0.0;
-					loop i from: 0 to: length(mean_v) - 1 { change <- max(change, abs(mean_v[i] - stab_prev[i])); }
+					// stabilizacja oceniana na udziale ALLD (indeks 2) i udziale D (indeks 7)
+					loop i over: [2, 7] { change <- max(change, abs(mean_v[i] - stab_prev[i])); }
 					stab_count <- change < stab_eps ? stab_count + 1 : 0;
 					if stab_count >= stab_k and stabilized_at < 0 { stabilized_at <- cycle; }
 				}
@@ -301,13 +309,14 @@ global {
 		float payoff_all <- mean_score_all() / 1000;
 		float known_partners <- mean_known_partners();
 		float distinct_partners <- mean_distinct_partners_window();
+		float games_per_partner <- mean_games_per_partner();
 		float exceeding_dunbar <- share_exceeding_dunbar();
 		bool fixated <- !empty(classic_characters where (world.share_of(each) >= 1.0));
 		bool stabilized <- stab_count >= stab_k;
 		save [variant_name, prediction, seed, compat_N, well_mixed, payoff_preset, payoff_T, payoff_R, payoff_P, payoff_S,
-			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, end_cycle,
+			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, player_speed, end_cycle,
 			share_TFT, share_ALLC, share_ALLD, share_FTFT, share_TF2T, share_GRIM, share_WSLS, d_share,
-			exploit_last_window, payoff_ALLD, payoff_TFT, payoff_all, known_partners, distinct_partners,
+			exploit_last_window, payoff_ALLD, payoff_TFT, payoff_all, known_partners, distinct_partners, games_per_partner,
 			exceeding_dunbar, fixated, stabilized, stabilized_at, nb_character_changes]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
@@ -318,7 +327,8 @@ global {
 		ts_prev_C <- nb_moves_C;
 		ts_prev_D <- nb_moves_D;
 		float d_share <- (d_c + d_d) = 0 ? 0.0 : d_d / (d_c + d_d);
-		save [variant_name, seed, cycle, share_of("TFT"), share_of("ALLC"), share_of("ALLD"), share_of("FTFT"),
+		save [variant_name, seed, payoff_preset, compat_N, well_mixed, mutation_rate, dunbar_limit, player_speed,
+			cycle, share_of("TFT"), share_of("ALLC"), share_of("ALLD"), share_of("FTFT"),
 			share_of("TF2T"), share_of("GRIM"), share_of("WSLS"), share_of("QLEARN"), share_of("AQLEARN"),
 			d_share, nb_character_changes]
 			to: "../results/character_timeseries.csv" rewrite: false format: "csv" header: true;
@@ -786,6 +796,7 @@ species player skills: [moving] {
 	// parametry zależne od charakteru - wydzielone z global.init, żeby dało się je testować
 	action apply_character_params() {
 		sensitivity <- movement_sensitivity;
+		move_speed <- player_speed;
 		if character = "AQLEARN" {
 			social_sensitivity <- social_sensitivity_aqlearn;
 			social_learning_boost <- social_learning_boost_aqlearn;
@@ -1322,6 +1333,7 @@ experiment PD type: gui {
 	parameter "Skład rdzenia" var: compat_mix among: ["equal", "tft_alld"] category: "Etap 1 – zgodność";
 	parameter "Macierz wypłat" var: payoff_preset among: ["custom", "PD_classic", "weak_PD", "snowdrift"] category: "Etap 1 – zgodność";
 	parameter "Eksport compat_results.csv" var: compat_export category: "Etap 1 – zgodność";
+	parameter "Prędkość graczy (m/cykl)" var: player_speed min: 0.0 category: "Etap 1 – zgodność";
 	parameter "Eksport szeregów czasowych" var: timeseries_export category: "Diagnostyka";
 	parameter "Co ile cykli próbka" var: sample_interval min: 1 category: "Diagnostyka";
 
@@ -1466,6 +1478,7 @@ experiment S1_P12_space type: batch repeat: 15 keep_seed: true until: cycle > en
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
 	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
 	parameter "evolution_on" var: evolution_on init: true;
 	parameter "well_mixed" var: well_mixed init: false;
@@ -1484,12 +1497,34 @@ experiment S1_P12_wellmixed type: batch repeat: 15 keep_seed: true until: cycle 
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
 	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
 	parameter "evolution_on" var: evolution_on init: true;
 	parameter "well_mixed" var: well_mixed init: true;
 	parameter "end_cycle" var: end_cycle init: 20000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "compat_N" var: compat_N among: [200, 500];
+}
+
+// P1 przy mniejszej mobilności: więcej gier z tymi samymi sąsiadami (player_speed 2.0 = S1_P12_space)
+experiment S1_P1_mobility type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S1_P1_mobility";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "player_speed" var: player_speed among: [0.5, 0.1];
 	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
 	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
 	parameter "compat_N" var: compat_N among: [200, 500];
@@ -1502,6 +1537,7 @@ experiment S1_P3_space type: batch repeat: 15 keep_seed: true until: cycle > end
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
 	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
 	parameter "evolution_on" var: evolution_on init: false;
 	parameter "well_mixed" var: well_mixed init: false;
@@ -1520,6 +1556,7 @@ experiment S1_P3_wellmixed type: batch repeat: 15 keep_seed: true until: cycle >
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
 	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
 	parameter "evolution_on" var: evolution_on init: false;
 	parameter "well_mixed" var: well_mixed init: true;
