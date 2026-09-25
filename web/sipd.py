@@ -1884,6 +1884,43 @@ def run_batch(name, **kw):
     return b
 
 
+# --- U10: równoległy batch (tylko CLI; w Pyodide nie ma procesów) ----------------
+_WORKER_NETWORKS = {}
+
+
+def _batch_worker(job):
+    """Jeden przebieg batcha w procesie roboczym; funkcja na poziomie modułu (pickle)."""
+    params, seed, geojson, until_key = job
+    if geojson:
+        key = ("geojson", params.get("network_cleanup", False), params.get("geojson_crs", "auto"))
+        if key not in _WORKER_NETWORKS:
+            _WORKER_NETWORKS[key] = PathNetwork.from_geojson(geojson, drop_loops=key[1], crs=key[2])
+    else:
+        key = (params.get("synthetic_grid", DEFAULTS["synthetic_grid"]),
+               params.get("synthetic_spacing", DEFAULTS["synthetic_spacing"]))
+        if key not in _WORKER_NETWORKS:
+            _WORKER_NETWORKS[key] = PathNetwork.synthetic(n=key[0], spacing=key[1])
+    m = Model(Params(**params), seed=seed, network=_WORKER_NETWORKS[key])
+    limit = getattr(m.p, until_key)
+    while not (m.cycle > limit):
+        m.step()
+    return {attr: getattr(m, attr) for _, attr in BATCH_OUTPUTS}
+
+
+def run_batch_parallel(name, workers=None, geojson=None, **kw):
+    """Te same joby i seedy co BatchRun, przebiegi w osobnych procesach; wiersze w kolejności jobów
+    (ex.map ją zachowuje), więc wynik identyczny z run_batch."""
+    from concurrent.futures import ProcessPoolExecutor   # import tutaj: Pyodide nie ma procesów
+    b = BatchRun(name, geojson=geojson, **kw)
+    jobs = [(p, s, geojson, b.until_key) for p, s in b.jobs]
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        for res in ex.map(_batch_worker, jobs):
+            for _, attr in BATCH_OUTPUTS:
+                getattr(b, attr).extend(res[attr])
+            b.done += 1
+    return b
+
+
 # ---------------------------------------------------------------------------
 # testy (odpowiedniki experiment ... type: test z PD.gaml)
 # ---------------------------------------------------------------------------
@@ -2457,6 +2494,20 @@ def t_batch_overrides():
     assert all(p["unlimited_games"] is True for p, _ in b2.jobs)
 
 
+def t_parallel_batch_matches_sequential():
+    # U10: tryb równoległy daje identyczne wiersze w tej samej kolejności (pomijany w przeglądarce)
+    if sys.platform == "emscripten":
+        return
+    # A_baseline nie ma stałego seedu (keep_seed: false, jak w PD.gaml) - seed podany jawnie
+    seq = run_batch("A_baseline", repeat=2, end_cycle=200, seed=123)
+    par = run_batch_parallel("A_baseline", workers=2, repeat=2, end_cycle=200, seed=123)
+    assert seq.ablation_rows and par.ablation_rows == seq.ablation_rows
+    seq2 = run_batch("PM4_heatmap", repeat=1, end_cycle=150)
+    par2 = run_batch_parallel("PM4_heatmap", workers=2, repeat=1, end_cycle=150)
+    for _, attr in BATCH_OUTPUTS:
+        assert getattr(par2, attr) == getattr(seq2, attr), attr
+
+
 def t_smoke_full_run():
     # nie ma odpowiednika w GAML: przebieg całego modelu na syntetycznej sieci bez błędów
     m = Model(Params(nb_QLEARN=4, nb_AQLEARN=4, nb_TFT=2, nb_ALLC=2, nb_ALLD=2, nb_FTFT=2, nb_TF2T=2,
@@ -2520,6 +2571,7 @@ def main(argv=None):
     ap.add_argument("--set", nargs="*", default=[], metavar="NAZWA=WARTOŚĆ",
                     help="nadpisanie parametrów (--gui-demo i --experiment)")
     ap.add_argument("--out", default=".", help="katalog na pliki CSV")
+    ap.add_argument("--workers", type=int, default=1, help="procesy dla --experiment (1 = sekwencyjnie)")
     a = ap.parse_args(argv)
 
     geo = open(a.geojson, encoding="utf-8").read() if a.geojson else None
@@ -2542,8 +2594,9 @@ def main(argv=None):
     if a.experiment:
         t0 = time.time()
         overrides = {k: _parse_value(v) for k, v in (s.split("=", 1) for s in a.set)}
-        b = run_batch(a.experiment, repeat=a.repeat, end_cycle=a.end_cycle, geojson=geo, seed=a.seed,
-                      overrides=overrides)
+        kw = dict(repeat=a.repeat, end_cycle=a.end_cycle, geojson=geo, seed=a.seed, overrides=overrides)
+        b = (run_batch_parallel(a.experiment, workers=a.workers, **kw) if a.workers and a.workers > 1
+             else run_batch(a.experiment, **kw))
         print("%s: %d przebiegów, %.1f s" % (a.experiment, b.total, time.time() - t0))
         for name, rows in batch_outputs(b):
             save(name, rows)
