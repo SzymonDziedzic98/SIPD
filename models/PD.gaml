@@ -338,8 +338,8 @@ global {
 	int warmup <- 5000;               // cykle wygrzewania przed oceną stabilizacji
 	int stab_window <- 1000;          // okno średniej kroczącej udziałów
 	float stab_eps <- 0.02;           // maks. zmiana średnich (udział ALLD i udział D) między kolejnymi oknami
-	float player_speed <- 2.0;
-	string movement_mode <- "default";   // "default": ważony wybór węzła (feedback, relacje); "schelling": Faza 5        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
+	float player_speed <- 2.0;        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
+	string movement_mode <- "default";   // "default": ważony wybór węzła (feedback, relacje); "schelling": Faza 5
 	int stab_k <- 5;                  // (okna: tylko do średnich końcowych; stabilizację ocenia trend poniżej)
 	float stab_trend_eps <- 0.02;     // stabilizacja: |trend udziału ALLD| w 2. połowie przebiegu < 0,02 na 10 000 cykli
 	int tr_n <- 0;                    // sumy do regresji liniowej udziału ALLD względem cyklu
