@@ -183,6 +183,21 @@ global {
 		}
 	}
 
+	// --- Moduł 3: pokrewieństwo (reguła Hamiltona) - PROPOZYCJA, NIEZAIMPLEMENTOWANE ---
+	// Cel: sprawdzić rb > c (Hamilton) razem z P1-P3.
+	// 1. Stałe grupy rodzinne: przy tworzeniu graczy global kin_group_size (np. 5) dzieli populację na
+	//    rodziny (int family_id); kin_r (0-1) = współczynnik pokrewieństwa w rodzinie, 0 poza nią.
+	// 2. Wypłata ważona pokrewieństwem (Hamilton/Grafen): przy liczeniu π do ewolucji
+	//    π_eff = π_own + r * π_partner dla gier z krewnym (r = kin_r gdy ten sam family_id); score bez zmian.
+	//    Alternatywa: pełna "inclusive fitness" = π_own + kin_r * średnia π rodziny w oknie.
+	// 3. Rozpoznawanie krewnych: domyślnie pełne (znany family_id); wariant z błędem rozpoznania.
+	// 4. Przestrzeń: rodziny startują w jednym węźle sieci (lepkość populacji) albo losowo - dwa warianty,
+	//    bo sama przestrzeń tworzy "pokrewieństwo" przez lokalną imitację.
+	// 5. Predykcja P4: kooperacja z krewnymi rośnie, gdy kin_r * b > c; w PD z T,R,P,S przyjąć
+	//    b = R - S, c = T - R (przybliżenie donation game) i raportować próg kin_r* = c / b.
+	// 6. Imitacja/mutacja nie zmienia family_id (dziedziczy się rodzina, nie strategia).
+	// Do decyzji: sposób ważenia (2), start przestrzenny (4), czy strategie mogą warunkować ruch na family_id.
+
 	// --- Etap 1: eksperyment kompatybilności ---
 	bool compat_core <- false;        // rdzeń: tylko strategie klasyczne; bez disorder, kotwicy, Q-learningu, ruchu środowiskowego/społecznego
 	int compat_N <- 200;              // liczebność populacji w rdzeniu
