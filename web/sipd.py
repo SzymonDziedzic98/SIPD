@@ -74,6 +74,9 @@ DEFAULTS = {
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
     "game_type": "PD",
     "classic_start_cooperate": False,
+    # tylko port Pythona: rozmiar syntetycznej sieci (gdy brak GeoJSON) - n x n węzłów co spacing m
+    "synthetic_grid": 10,
+    "synthetic_spacing": 60.0,
     "grid_cols": 50,
     "grid_rows": 50,
     "cell_learning_rate": 0.1,
@@ -416,7 +419,8 @@ class Player:
         self.epsilon = 0.15
         self.heading = rng.uniform(0, 360)
         self.speed = 1.0           # domyślna prędkość skill moving (wander)
-        self.location = (rng.uniform(0, model.width), rng.uniform(0, model.height))
+        self.idx = None            # kolejność utworzenia (ustawia Model.create_player)
+        self._loc = (rng.uniform(0, model.width), rng.uniform(0, model.height))
         for k, v in attrs.items():
             if not hasattr(self, k):
                 raise KeyError("Nieznany atrybut gracza: " + k)
@@ -424,6 +428,16 @@ class Player:
 
     def __repr__(self):
         return self.name
+
+    @property
+    def location(self):
+        return self._loc
+
+    @location.setter
+    def location(self, value):
+        old = self._loc
+        self._loc = value
+        self.model._moved(self, old)
 
     # --- parametry i pamięć partnerów -----------------------------------
     def apply_character_params(self):
@@ -768,6 +782,8 @@ class Model:
         self.games = []
         self.players = []
         self.character_pool = []
+        self._bucket = None        # indeks przestrzenny dla players_within (kubełki o boku = promień)
+        self._grid = {}
         # wyjścia (odpowiedniki plików w ../results/)
         self.game_log = []            # PD.csv
         self.ablation_rows = []       # ablation_results.csv
@@ -781,10 +797,10 @@ class Model:
             elif geojson is not None:
                 self.network = PathNetwork.from_geojson(geojson)
             else:
-                self.network = PathNetwork.synthetic()
+                self.network = PathNetwork.synthetic(n=P.synthetic_grid, spacing=P.synthetic_spacing)
             self.width, self.height = self.network.width, self.network.height
         else:
-            self.network = network or PathNetwork.synthetic()
+            self.network = network or PathNetwork.synthetic(n=P.synthetic_grid, spacing=P.synthetic_spacing)
             self.width = self.height = float(P.world_size)
 
         cw, ch = self.width / P.grid_cols, self.height / P.grid_rows
@@ -815,7 +831,10 @@ class Model:
 
     def create_player(self, character=None, **attrs):
         pl = Player(self, "player%d" % len(self.players), character, **attrs)
+        pl.idx = len(self.players)
         self.players.append(pl)
+        if self._bucket is not None:
+            self._grid.setdefault(self._key(pl._loc), set()).add(pl)
         return pl
 
     def create_game(self, p1, p2, pair_key, location=None):
@@ -835,11 +854,39 @@ class Model:
         r = min(int(y / self.height * P.grid_rows), P.grid_rows - 1) if self.height > 0 else 0
         return self.cells[r * P.grid_cols + c]
 
+    # --- indeks przestrzenny: ten sam wynik co pełne przeszukanie, w kolejności tworzenia agentów ---
+    def _key(self, loc):
+        return (int(loc[0] // self._bucket), int(loc[1] // self._bucket))
+
+    def _rebuild_index(self, size):
+        self._bucket = size
+        self._grid = {}
+        for p in self.players:
+            self._grid.setdefault(self._key(p._loc), set()).add(p)
+
+    def _moved(self, pl, old):
+        if self._bucket is None or pl.idx is None:
+            return
+        k0, k1 = self._key(old), self._key(pl._loc)
+        if k0 != k1:
+            self._grid[k0].discard(pl)
+            self._grid.setdefault(k1, set()).add(pl)
+
     def players_within(self, me, radius):
-        x, y = me.location
+        size = float(radius) if radius > 0 else 1.0
+        if self._bucket != size:
+            self._rebuild_index(size)
+        x, y = me._loc
+        kx, ky = self._key(me._loc)
         r2 = radius * radius
-        return [q for q in self.players
-                if q is not me and (q.location[0] - x) ** 2 + (q.location[1] - y) ** 2 <= r2]
+        found = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for q in self._grid.get((kx + dx, ky + dy), ()):
+                    if q is not me and (q._loc[0] - x) ** 2 + (q._loc[1] - y) ** 2 <= r2:
+                        found.append(q)
+        found.sort(key=lambda q: q.idx)
+        return found
 
     @staticmethod
     def pair_key(a, b):
@@ -1114,7 +1161,9 @@ class BatchRun:
         exp_seed = seed if seed is not None else spec.get("seed")
         seeder = random.Random(exp_seed) if exp_seed is not None else random.Random()
         seeds = [seeder.randrange(2 ** 31) for _ in range(self.repeat)]   # keep_seed: te same dla kombinacji
-        self.network = network or (PathNetwork.from_geojson(geojson) if geojson else PathNetwork.synthetic())
+        self.network = network or (PathNetwork.from_geojson(geojson) if geojson else PathNetwork.synthetic(
+            n=base.get("synthetic_grid", DEFAULTS["synthetic_grid"]),
+            spacing=base.get("synthetic_spacing", DEFAULTS["synthetic_spacing"])))
         self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows = [], [], []
