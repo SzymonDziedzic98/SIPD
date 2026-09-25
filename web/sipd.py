@@ -89,6 +89,7 @@ DEFAULTS = {
     "stab_eps": 0.02,
     "player_speed": 2.0,
     "stab_k": 5,
+    "stab_trend_eps": 0.02,
     "vision_radius": 10,
     "world_size": 10,
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
@@ -884,6 +885,7 @@ class Model:
         self.win_games0 = 0
         self.win_expl0 = 0
         self.exploit_last_window = 0.0
+        self.tr = [0, 0.0, 0.0, 0.0, 0.0]   # n, Σt, Σy, Σt², Σty (udział ALLD, 2. połowa przebiegu)
         self.perf_last_time = 0.0
         self.active_pairs = {}
         self.games = []
@@ -1133,6 +1135,9 @@ class Model:
         d_c, d_d = self.nb_moves_C - self.stab_prev_C, self.nb_moves_D - self.stab_prev_D
         self.stab_prev_C, self.stab_prev_D = self.nb_moves_C, self.nb_moves_D
         v.append(0.0 if d_c + d_d == 0 else d_d / (d_c + d_d))
+        if self.cycle > P.end_cycle / 2:
+            t, y = self.cycle, v[2]
+            self.tr = [self.tr[0] + 1, self.tr[1] + t, self.tr[2] + y, self.tr[3] + t * t, self.tr[4] + t * y]
         if self.cycle <= P.warmup:
             return
         if not self.stab_sum:
@@ -1153,6 +1158,11 @@ class Model:
             self.exploit_last_window = 0.0 if dg == 0 else (self.nb_exploitations - self.win_expl0) / dg
             self.win_games0, self.win_expl0 = self.nb_game, self.nb_exploitations
 
+    def alld_trend_10k(self):
+        n, st_, sy, stt, sty = self.tr
+        den = n * stt - st_ * st_
+        return 0.0 if n < 2 or den == 0 else 10000 * (n * sty - st_ * sy) / den
+
     def _reflex_export_compat(self):
         P = self.p
         fin = self.stab_last or ([self.share_of(c) for c in CLASSIC] + [0.0])
@@ -1164,7 +1174,8 @@ class Model:
             self.exploit_last_window, self.mean_for("ALLD") / 1000, self.mean_for("TFT") / 1000,
             self.mean_score_all() / 1000, self.mean_known_partners(), self.mean_distinct_partners_window(),
             self.mean_games_per_partner(),
-            self.share_exceeding_dunbar(), fixated, self.stab_count >= P.stab_k, self.stabilized_at,
+            self.share_exceeding_dunbar(), fixated, abs(self.alld_trend_10k()) < P.stab_trend_eps,
+            self.alld_trend_10k(),
             self.nb_character_changes])
 
     def fermi_probability(self, pi_model, pi_self):
@@ -1343,7 +1354,7 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "evolution_interval", "dunbar_limit", "vision_radius", "player_speed", "end_cycle",
                  "share_TFT", "share_ALLC", "share_ALLD", "share_FTFT", "share_TF2T", "share_GRIM", "share_WSLS",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
-                 "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "stabilized_at",
+                 "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "alld_trend_10k",
                  "nb_character_changes"]
 
 CSV_HEADERS = {
@@ -1414,7 +1425,7 @@ for _space, _wm in (("space", False), ("wellmixed", True)):
         among={"mutation_rate": [0.0, 0.01], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
                "compat_N": [200, 500]},
         params=dict(_S1, variant_name="S1_P12_" + _space, prediction="P1P2", compat_mix="equal",
-                    evolution_on=True, well_mixed=_wm))
+                    evolution_on=True, well_mixed=_wm, end_cycle=100000))
     BATCH_EXPERIMENTS["S1_P3_" + _space] = dict(
         repeat=15, until="end_cycle", seed=20261123,
         among={"dunbar_limit": [0, 5, 15, 50], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
@@ -1428,7 +1439,7 @@ BATCH_EXPERIMENTS["S1_P1_mobility"] = dict(
     among={"player_speed": [0.5, 0.1], "mutation_rate": [0.0, 0.01],
            "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"], "compat_N": [200, 500]},
     params=dict(_S1, variant_name="S1_P1_mobility", prediction="P1P2", compat_mix="equal",
-                evolution_on=True, well_mixed=False))
+                evolution_on=True, well_mixed=False, end_cycle=100000))
 
 
 def park_grid_for(n_agents):
@@ -1916,15 +1927,25 @@ def t_payoff_presets():
 
 
 def t_stability_detection():
-    # agenci rozproszeni w ogromnym świecie, bez gier: wektor się nie zmienia -> stabilizacja
+    # agenci rozproszeni w ogromnym świecie, bez gier: udziały stałe -> trend 0, stabilizacja
     m = Model(Params(compat_core=True, compat_N=14, compat_export=True, vision_radius=0, real_env=False,
                      world_size=100000, warmup=100,
                      stab_window=200, stab_k=3, end_cycle=2000, log_games=False), seed=3)
     m.run(2001)
     assert m.nb_game == 0
-    assert m.stab_count >= 3 and m.stabilized_at == 100 + 200 * 4   # 4. okno po warmup = 3. porównanie bez zmian
     row = m.compat_rows[0]
     assert len(row) == len(COMPAT_HEADER) and row[COMPAT_HEADER.index("stabilized")] is True
+    assert row[COMPAT_HEADER.index("alld_trend_10k")] == 0.0
+
+
+def t_trend_criterion():
+    # sztuczny szereg: ALLD rośnie liniowo o 0,05 na 10 000 cykli -> trend 0,05, brak stabilizacji
+    m = _test_model(end_cycle=20000)
+    for t in range(10100, 20001, 100):
+        y = 0.3 + 0.05 * (t / 10000.0)
+        m.tr = [m.tr[0] + 1, m.tr[1] + t, m.tr[2] + y, m.tr[3] + t * t, m.tr[4] + t * y]
+    assert abs(m.alld_trend_10k() - 0.05) < 1e-6
+    assert not abs(m.alld_trend_10k()) < m.p.stab_trend_eps
 
 
 def t_smoke_full_run():

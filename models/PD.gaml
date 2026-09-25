@@ -194,7 +194,13 @@ global {
 	int stab_window <- 1000;          // okno średniej kroczącej udziałów
 	float stab_eps <- 0.02;           // maks. zmiana średnich (udział ALLD i udział D) między kolejnymi oknami
 	float player_speed <- 2.0;        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
-	int stab_k <- 5;                  // tyle kolejnych okien ze zmianą < eps = stabilizacja
+	int stab_k <- 5;                  // (okna: tylko do średnich końcowych; stabilizację ocenia trend poniżej)
+	float stab_trend_eps <- 0.02;     // stabilizacja: |trend udziału ALLD| w 2. połowie przebiegu < 0,02 na 10 000 cykli
+	int tr_n <- 0;                    // sumy do regresji liniowej udziału ALLD względem cyklu
+	float tr_st <- 0.0;
+	float tr_sy <- 0.0;
+	float tr_stt <- 0.0;
+	float tr_sty <- 0.0;
 	list<string> classic_characters <- ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"];
 	// stan wykrywania stabilizacji (wektor = udziały 7 klasycznych + udział D w próbce)
 	list<float> stab_sum <- [];
@@ -269,6 +275,14 @@ global {
 		stab_prev_C <- nb_moves_C;
 		stab_prev_D <- nb_moves_D;
 		v <+ ((d_c + d_d) = 0 ? 0.0 : d_d / (d_c + d_d));
+		if cycle > end_cycle / 2 {
+			float t <- float(cycle);   // float: cycle^2 przekracza zakres int przy 100 000 cykli
+			tr_n <- tr_n + 1;
+			tr_st <- tr_st + t;
+			tr_sy <- tr_sy + v[2];
+			tr_stt <- tr_stt + t * t;
+			tr_sty <- tr_sty + t * v[2];
+		}
 		if cycle > warmup {
 			if empty(stab_sum) { stab_sum <- list_with(length(v), 0.0); }
 			loop i from: 0 to: length(v) - 1 { stab_sum[i] <- stab_sum[i] + v[i]; }
@@ -293,6 +307,12 @@ global {
 		}
 	}
 
+	// nachylenie udziału ALLD w 2. połowie przebiegu, w jednostkach "na 10 000 cykli"
+	float alld_trend_10k() {
+		float den <- tr_n * tr_stt - tr_st * tr_st;
+		return (tr_n < 2 or den = 0) ? 0.0 : 10000 * (tr_n * tr_sty - tr_st * tr_sy) / den;
+	}
+
 	// wiersz = przebieg; udziały i udział D to średnie z ostatniego pełnego okna
 	reflex export_compat when: compat_export and cycle = end_cycle {
 		list<float> fin <- empty(stab_last) ? ((classic_characters collect (world.share_of(each))) + [0.0]) : stab_last;
@@ -312,12 +332,13 @@ global {
 		float games_per_partner <- mean_games_per_partner();
 		float exceeding_dunbar <- share_exceeding_dunbar();
 		bool fixated <- !empty(classic_characters where (world.share_of(each) >= 1.0));
-		bool stabilized <- stab_count >= stab_k;
+		float alld_trend <- alld_trend_10k();
+		bool stabilized <- abs(alld_trend) < stab_trend_eps;
 		save [variant_name, prediction, seed, compat_N, well_mixed, payoff_preset, payoff_T, payoff_R, payoff_P, payoff_S,
 			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, player_speed, end_cycle,
 			share_TFT, share_ALLC, share_ALLD, share_FTFT, share_TF2T, share_GRIM, share_WSLS, d_share,
 			exploit_last_window, payoff_ALLD, payoff_TFT, payoff_all, known_partners, distinct_partners, games_per_partner,
-			exceeding_dunbar, fixated, stabilized, stabilized_at, nb_character_changes]
+			exceeding_dunbar, fixated, stabilized, alld_trend, nb_character_changes]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -1482,7 +1503,7 @@ experiment S1_P12_space type: batch repeat: 15 keep_seed: true until: cycle > en
 	parameter "compat_mix" var: compat_mix init: "equal";
 	parameter "evolution_on" var: evolution_on init: true;
 	parameter "well_mixed" var: well_mixed init: false;
-	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "end_cycle" var: end_cycle init: 100000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
 	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
@@ -1501,7 +1522,7 @@ experiment S1_P12_wellmixed type: batch repeat: 15 keep_seed: true until: cycle 
 	parameter "compat_mix" var: compat_mix init: "equal";
 	parameter "evolution_on" var: evolution_on init: true;
 	parameter "well_mixed" var: well_mixed init: true;
-	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "end_cycle" var: end_cycle init: 100000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
 	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
@@ -1521,7 +1542,7 @@ experiment S1_P1_mobility type: batch repeat: 15 keep_seed: true until: cycle > 
 	parameter "compat_mix" var: compat_mix init: "equal";
 	parameter "evolution_on" var: evolution_on init: true;
 	parameter "well_mixed" var: well_mixed init: false;
-	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "end_cycle" var: end_cycle init: 100000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
 	parameter "player_speed" var: player_speed among: [0.5, 0.1];

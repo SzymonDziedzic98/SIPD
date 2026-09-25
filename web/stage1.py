@@ -9,9 +9,9 @@ w GAMA park jest stały (drogi.geojson), więc gęstość rośnie z N.
     python web/stage1.py --verdict results/compat_results.csv > docs/stage1_verdict.md
 
 Kryteria werdyktów (FIX = 0.05, zob. docs/gamadays.md):
-- P1: w przebiegu z ewolucją udział ALLD i udział D (ostatnie okno) leżą w (FIX, 1-FIX), a przebieg
-  się ustabilizował (średnie z okien 1000 cykli udziału ALLD i udziału D zmieniają się o < 0,02 przez
-  5 kolejnych okien po wygrzaniu 5000 cykli). "tak" gdy spełnia >= 80% powtórzeń, "nie" gdy <= 20%, inaczej "warunkowo".
+- P1: w przebiegu z ewolucją udział ALLD i udział D (ostatnie okno 1000 cykli) leżą w (FIX, 1-FIX),
+  a przebieg się ustabilizował: nachylenie prostej dopasowanej do udziału ALLD w 2. połowie przebiegu
+  ma |nachylenie| < 0,02 na 10 000 cykli. "tak" gdy spełnia >= 80% powtórzeń, "nie" gdy <= 20%, inaczej "warunkowo".
 - P2: mutation_rate = 0 -> ALLC wymiera (udział < 1/N) w >= 80% powtórzeń; mutation_rate > 0 ->
   ALLC obecny (> 0) w >= 80% powtórzeń i średnio <= 0.2. "tak" gdy obie części, "warunkowo" gdy jedna.
 - P3: zysk oszustów = wypłata ALLD na grę przy limicie L minus przy braku limitu; istotny, gdy
@@ -125,8 +125,8 @@ def verdict(path):
     p12 = [r for r in rows if r["prediction"] == "P1P2"]
     if p12:
         out += ["## P1 – oszuści stabilni w (0, 1), P2 – altruiści", "",
-                "| układ | macierz | N | prędkość | mutacja | n | gier/partnera | ALLD | udział D | ALLC | stabilizacja | P1 | P2 (część) |",
-                "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+                "| układ | macierz | N | prędkość | mutacja | n | gier/partnera | ALLD | udział D | ALLC | trend ALLD /10k | stabilizacja | P1 | P2 (część) |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         p2_parts = {}
         keyf = lambda r: (space(r), r["payoff_preset"], int(r["compat_N"]), r.get("player_speed", 2.0),
                           r["mutation_rate"])
@@ -145,10 +145,11 @@ def verdict(path):
                     ("nie" if sum(ok2) / n <= 0.2 else "warunkowo")
                 part = "utrzymuje się: " + v2
             p2_parts.setdefault(key[:4], []).append(v2)
-            out.append("| %s | %s | %d | %g | %g | %d | %s | %s | %s | %s | %d%% | %s | %s |" % (
+            out.append("| %s | %s | %d | %g | %g | %d | %s | %s | %s | %s | %s | %d%% | %s | %s |" % (
                 key[0], key[1], key[2], key[3], key[4], n, fmt([r["games_per_partner"] for r in g], 1),
                 fmt([r["share_ALLD"] for r in g]),
                 fmt([r["d_share"] for r in g]), fmt([r["share_ALLC"] for r in g], 3),
+                fmt([r["alld_trend_10k"] for r in g], 3),
                 round(100 * sum(r["stabilized"] for r in g) / n), v1, part))
         out += ["", "**P2 łącznie** (obie części muszą się utrzymać):", ""]
         for key, parts in sorted(p2_parts.items()):
