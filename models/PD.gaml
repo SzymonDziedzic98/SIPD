@@ -86,10 +86,27 @@ global {
 
 	geometry shape <- real_env ? envelope(park_boundary_shapefile) : square(world_size);
 
-	int payoff_R <- 5;
-	int payoff_P <- 1;
-	int payoff_T <- 9;
-	int payoff_S <- 0;
+	// wypłaty jako float (słaby PD / snowdrift); wartości domyślne = wersja JASSS
+	float payoff_R <- 5.0;
+	float payoff_P <- 1.0;
+	float payoff_T <- 9.0;
+	float payoff_S <- 0.0;
+	string game_type <- "PD";   // "PD": T>R>P>S, "weak_PD": T>R>P=S, "snowdrift": T>R>S>P
+
+	// TFT/TF2T/WSLS przy pierwszym spotkaniu: false = losowo 50/50 (JASSS), true = C (klasycznie)
+	bool classic_start_cooperate <- false;
+
+	bool payoffs_valid() {
+		if game_type = "PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P > payoff_S; }
+		if game_type = "weak_PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P = payoff_S; }
+		if game_type = "snowdrift" { return payoff_T > payoff_R and payoff_R > payoff_S and payoff_S > payoff_P; }
+		return false;
+	}
+
+	bool payoffs_integer() {
+		return payoff_T = round(payoff_T) and payoff_R = round(payoff_R)
+			and payoff_P = round(payoff_P) and payoff_S = round(payoff_S);
+	}
 
 	int grid_cols <- 50;
 	int grid_rows <- 50;
@@ -256,11 +273,16 @@ global {
 	}
 
 	init {
-		if not (payoff_T > payoff_R and payoff_R > payoff_P and payoff_P > payoff_S) {
-			error "Niepoprawna macierz wypłat: wymagane T > R > P > S.
+		if not payoffs_valid() {
+			error "Macierz wypłat niezgodna z game_type=" + game_type
+				+ " (PD: T>R>P>S, weak_PD: T>R>P=S, snowdrift: T>R>S>P).
 Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payoff_S;
 		}
-		if not (2 * payoff_R > payoff_T + payoff_S) {
+		// height jest licznikiem cykli blokady - przy ograniczeniu gier wypłaty muszą być całkowite
+		if not unlimited_games and not payoffs_integer() {
+			error "Tryb z ograniczeniem gier (unlimited_games=false) wymaga całkowitych wypłat.";
+		}
+		if game_type = "PD" and not (2 * payoff_R > payoff_T + payoff_S) {
 			write "OSTRZEŻENIE: 2R <= T+S (" + (2*payoff_R) + " <= " + (payoff_T + payoff_S) + ")
 - naprzemienna eksploatacja nie jest gorsza niż stała kooperacja.";
 		}
@@ -393,8 +415,8 @@ species game{
 			if myself.p1_move = "D" { do register_betrayal(cell_p2); }
 		}
 
-		int p1_payoff <- 0;
-		int p2_payoff <- 0;
+		float p1_payoff <- 0.0;
+		float p2_payoff <- 0.0;
 
 
 		if p1_move = "D" and p2_move = "D" {
@@ -430,8 +452,8 @@ species game{
 			p2.score <- p2.score + p2_payoff;
 			p1.score <- p1.score + p1_payoff;
 		} else {
-			p2.height <- p2.height + p2_payoff;
-			p1.height <- p1.height + p1_payoff;
+			p2.height <- p2.height + int(p2_payoff);
+			p1.height <- p1.height + int(p1_payoff);
 		}
 
 		p2.lists_per_other[p1] <+ p1_move;
@@ -444,14 +466,14 @@ species game{
 		p2.nb_games <- p2.nb_games + 1;
 
 		if p1.character = "QLEARN" or p1.character = "AQLEARN"{
-			int payoff_of_p1 <- p1_payoff;
+			float payoff_of_p1 <- p1_payoff;
 			ask p1 {
 				do update_q(opponent_of_p1, payoff_of_p1);
 			}
 		}
 
 		if p2.character = "QLEARN" or p2.character = "AQLEARN"{
-			int payoff_of_p2 <- p2_payoff;
+			float payoff_of_p2 <- p2_payoff;
 			ask p2 {
 				do update_q(opponent_of_p2, payoff_of_p2);
 			}
@@ -485,7 +507,7 @@ species game{
 species player skills: [moving] {
 
 	int height <- 0;
-	int score <- 0;
+	float score <- 0.0;
 	float for_chart -> nb_games > 0 ? (score / nb_games * 1000) : 0.0;
 	list<player> close -> player at_distance(vision_radius);
 	string character;
@@ -666,7 +688,7 @@ species player skills: [moving] {
 		}
 	}
 
-	action update_q(player opponent, int reward) {
+	action update_q(player opponent, float reward) {
 		string s <- pending_state[opponent];
 		string a <- pending_action[opponent];
 
@@ -765,6 +787,7 @@ species player skills: [moving] {
 
 	string TFT(player p) {
 		if lists_per_other[p] = [] {
+			if classic_start_cooperate { return "C"; }
 			return flip(0.5) ? "C" : "D";
 		}
 		if last(lists_per_other[p]) = "C" {
@@ -796,6 +819,7 @@ species player skills: [moving] {
 
 	string TF2T(player p) {
 		if lists_per_other[p] = [] {
+			if classic_start_cooperate { return "C"; }
 			return flip(0.5) ? "C" : "D";
 		}
 		if last(2, lists_per_other[p]) != ["D","D"] {
@@ -813,6 +837,7 @@ species player skills: [moving] {
 
 	string WSLS(player p) {
 		if lists_per_other[p] = [] {
+			if classic_start_cooperate { return "C"; }
 			return flip(0.5) ? "C" : "D";
 		}
 		string my_last <- last(my_moves_per_other[p]);
@@ -940,6 +965,13 @@ experiment PD type: gui {
 	parameter "Wpływ środowiska na decyzję QLEARN" var: env_influence_qlearn category: "Środowisko";
 	parameter "Czułość społeczna AQLEARN" var: social_sensitivity_aqlearn category: "Środowisko";
 	parameter "Wzmocnienie uczenia społecznego AQLEARN" var: social_learning_boost_aqlearn category: "Środowisko";
+
+	parameter "Typ gry" var: game_type among: ["PD", "weak_PD", "snowdrift"] category: "Gra";
+	parameter "T (pokusa)" var: payoff_T category: "Gra";
+	parameter "R (nagroda)" var: payoff_R category: "Gra";
+	parameter "P (kara)" var: payoff_P category: "Gra";
+	parameter "S (frajer)" var: payoff_S category: "Gra";
+	parameter "TFT/TF2T/WSLS zaczynają od C" var: classic_start_cooperate category: "Gra";
 
 	parameter "Pomiar czasu cyklu" var: perf_log category: "Diagnostyka";
 	parameter "Okno pomiaru (cykle)" var: perf_interval min: 1 category: "Diagnostyka";
@@ -1348,5 +1380,58 @@ experiment test_anchor_shifts_early_behavior type: test {
         }
 
         assert c_count_a > c_count_b;
+    }
+}
+
+experiment test_payoff_validation type: test {
+    test "walidacja macierzy zależy od game_type" {
+        game_type <- "PD";
+        payoff_T <- 9.0; payoff_R <- 5.0; payoff_P <- 1.0; payoff_S <- 0.0;
+        assert world.payoffs_valid();
+        assert world.payoffs_integer();
+
+        game_type <- "weak_PD";
+        assert not world.payoffs_valid();   // P > S - to nie jest słaby PD
+        payoff_T <- 1.6; payoff_R <- 1.0; payoff_P <- 0.0; payoff_S <- 0.0;
+        assert world.payoffs_valid();
+        assert not world.payoffs_integer();
+
+        game_type <- "snowdrift";
+        assert not world.payoffs_valid();
+        payoff_T <- 4.0; payoff_R <- 3.0; payoff_S <- 2.0; payoff_P <- 0.0;
+        assert world.payoffs_valid();
+
+        game_type <- "PD";
+        assert not world.payoffs_valid();   // snowdrift nie przechodzi jako PD
+    }
+}
+
+experiment test_classic_start_switch type: test {
+    test "classic_start_cooperate: TFT/TF2T/WSLS zaczynają od C; wyłączony - losowo" {
+        broken_windows_sensitivity <- 0.0;
+        create player(character: "TFT") number: 1 returns: tft;
+        create player(character: "TF2T") number: 1 returns: tf2t;
+        create player(character: "WSLS") number: 1 returns: wsls;
+        create player(character: "ALLC") number: 1 returns: opps;
+        player opp <- first(opps);
+        ask player { do setup_lists(); }
+
+        classic_start_cooperate <- true;
+        int d_on <- 0;
+        loop times: 100 {
+            if first(tft).strategy(opp) = "D" { d_on <- d_on + 1; }
+            if first(tf2t).strategy(opp) = "D" { d_on <- d_on + 1; }
+            if first(wsls).strategy(opp) = "D" { d_on <- d_on + 1; }
+        }
+        assert d_on = 0;
+
+        classic_start_cooperate <- false;
+        int d_off <- 0;
+        loop times: 100 {
+            if first(tft).strategy(opp) = "D" { d_off <- d_off + 1; }
+            if first(tf2t).strategy(opp) = "D" { d_off <- d_off + 1; }
+            if first(wsls).strategy(opp) = "D" { d_off <- d_off + 1; }
+        }
+        assert d_off > 100 and d_off < 200;   // ~150 z 300
     }
 }
