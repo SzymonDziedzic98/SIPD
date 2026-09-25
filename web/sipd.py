@@ -1046,6 +1046,10 @@ class Player:
         self.location = (x, y)
 
     def reflex_height_decay(self):
+        """Tryb z limitem gier: wypłata trafia do height (blokada) i przechodzi do score po 1 na cykl.
+        U7: to, co zostało w height w ostatnim cyklu, nie trafia do score (tak samo w PD.gaml), więc
+        mean_for/for_chart lekko zaniżają wynik świeżo grających agentów. Eksperymenty zgodności używają
+        unlimited_games=True, gdzie tego efektu nie ma."""
         if self.height > 0:
             self.height -= 1
             self.score += 1
@@ -1174,6 +1178,9 @@ class Model:
         if P.game_type == "PD" and not (2 * P.payoff_R > P.payoff_T + P.payoff_S):
             self.warnings.append("OSTRZEŻENIE: 2R <= T+S (%s <= %s) - naprzemienna eksploatacja nie jest "
                                  "gorsza niż stała kooperacja." % (2 * P.payoff_R, P.payoff_T + P.payoff_S))
+        if P.game_type == "snowdrift" and (P.movement_sensitivity > 0 or P.env_influence_qlearn > 0):
+            self.warnings.append("OSTRZEŻENIE: feedback miejsc (feedback_value) nie zależy od macierzy - w snowdrift "
+                                 "ocenia C-D gorzej niż D-D, a ruch/uczenie środowiskowe z niego korzysta.")
         for k in CREATION_ORDER:
             self.character_pool += [k] * int(getattr(P, "nb_" + k))
         for ch in self.character_pool:
@@ -1269,6 +1276,9 @@ class Model:
 
     @staticmethod
     def feedback_value(my_move, opp_move):
+        # U6: wartości na sztywno, niezależne od macierzy wypłat (jak w PD.gaml). W snowdrift (T>R>S>P)
+        # wzajemna defekcja jest najgorsza, a feedback ocenia C-D (-1.0) gorzej niż D-D (-0.8).
+        # Działa tylko przez ruch środowiskowy i env_influence; compat_core je zeruje.
         return {("C", "C"): 0.1, ("D", "D"): -0.8, ("D", "C"): 1.0, ("C", "D"): -1.0}.get((my_move, opp_move), 0.0)
 
     def selected_player(self):
@@ -2397,6 +2407,16 @@ def t_games_per_partner_unaffected_by_window():
     m.mean_distinct_partners_window()              # przycina last_met_cycle
     assert m.mean_games_per_partner() == before
     assert abs(before - (5 / 2 + 4 / 1 + 1 / 1) / 3) < 1e-9
+
+
+def t_snowdrift_feedback_warning():
+    # U6: ostrzeżenie tylko gdy snowdrift + ruch/uczenie środowiskowe; compat_core je zeruje
+    warn = _test_model(payoff_preset="snowdrift", unlimited_games=True, movement_sensitivity=2.0)
+    assert any("feedback" in w for w in warn.warnings)
+    core = _test_model(payoff_preset="snowdrift", compat_core=True, compat_N=0)
+    assert not any("feedback" in w for w in core.warnings)
+    pd = _test_model(movement_sensitivity=2.0)
+    assert not any("feedback" in w for w in pd.warnings)
 
 
 def t_smoke_full_run():

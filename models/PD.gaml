@@ -553,6 +553,8 @@ global {
 		return all_players[idx];
 	}
 
+	// U6: wartości na sztywno, niezależne od macierzy wypłat. W snowdrift (T>R>S>P) wzajemna defekcja jest
+	// najgorsza, a feedback ocenia C-D (-1.0) gorzej niż D-D (-0.8). Działa przez ruch/uczenie środowiskowe.
 	float feedback_value(string my_move, string opp_move) {
 		if my_move = "C" and opp_move = "C" {
 			return 0.1;
@@ -713,6 +715,9 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 		// height jest licznikiem cykli blokady - przy ograniczeniu gier wypłaty muszą być całkowite
 		if not unlimited_games and not payoffs_integer() {
 			error "Tryb z ograniczeniem gier (unlimited_games=false) wymaga całkowitych wypłat.";
+		}
+		if game_type = "snowdrift" and (movement_sensitivity > 0 or env_influence_qlearn > 0) {
+			write "OSTRZEŻENIE: feedback miejsc (feedback_value) nie zależy od macierzy - w snowdrift ocenia C-D gorzej niż D-D, a ruch/uczenie środowiskowe z niego korzysta.";
 		}
 		if game_type = "PD" and not (2 * payoff_R > payoff_T + payoff_S) {
 			write "OSTRZEŻENIE: 2R <= T+S (" + (2*payoff_R) + " <= " + (payoff_T + payoff_S) + ")
@@ -1163,6 +1168,8 @@ species player skills: [moving] {
 		do wander(amplitude:90.0);
 	}
 
+	// U7: wypłata przechodzi z height do score po 1 na cykl; resztka height z końca przebiegu nie trafia
+	// do score (mean_for lekko zaniżone). Eksperymenty zgodności używają unlimited_games = true.
 	reflex height_decay when: !unlimited_games {
 		if height > 0 {
 			height <- height - 1;
