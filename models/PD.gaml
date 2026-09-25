@@ -447,6 +447,8 @@ global {
 			stab_samples <- stab_samples + 1;
 			if stab_samples * sample_interval >= stab_window {
 				list<float> mean_v <- stab_sum collect (each / stab_samples);
+				// U3: stab_count/stabilized_at nie trafiają do CSV - pozostałość po kryterium okien;
+				// "stabilized" liczy kryterium trendu (alld_trend_10k). Okna służą do średnich końcowych.
 				if !empty(stab_prev) {
 					float change <- 0.0;
 					// stabilizacja oceniana na udziale ALLD (indeks 2) i udziale D (indeks 7)

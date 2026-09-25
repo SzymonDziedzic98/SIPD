@@ -1375,6 +1375,8 @@ class Model:
         self.stab_samples += 1
         if self.stab_samples * P.sample_interval >= P.stab_window:
             mean_v = [x / self.stab_samples for x in self.stab_sum]
+            # U3: stab_count/stabilized_at nie trafiają do CSV - pozostałość po kryterium okien;
+            # "stabilized" liczy kryterium trendu (alld_trend_10k). Okna służą do średnich końcowych.
             if self.stab_prev:
                 # stabilizacja oceniana na udziale ALLD (indeks 2) i udziale D (indeks 7)
                 change = max(abs(mean_v[i] - self.stab_prev[i]) for i in (2, 7))
