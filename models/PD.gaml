@@ -96,6 +96,33 @@ global {
 	// TFT/TF2T/WSLS przy pierwszym spotkaniu: false = losowo 50/50 (JASSS), true = C (klasycznie)
 	bool classic_start_cooperate <- false;
 
+	// --- Moduł 1: limit Dunbara ---
+	int dunbar_limit <- 0;        // 0 = brak limitu (moduł wyłączony)
+	int partner_window <- 500;    // okno (cykle) dla metryki "różni partnerzy na agenta"
+	int nb_forgets_total <- 0;
+	int nb_forgets_prev <- 0;
+	int forgets_last_cycle <- 0;  // zapomnienia w poprzednim cyklu (reflex świata biegnie przed graczami)
+
+	float mean_known_partners() {
+		return empty(player) ? 0.0 : mean(player collect length(each.known_others));
+	}
+
+	float mean_distinct_partners_window() {
+		return empty(player) ? 0.0 : mean(player collect each.distinct_partners_in_window());
+	}
+
+	// udział agentów, którzy w oknie spotkali więcej różnych partnerów niż dunbar_limit;
+	// bliski 0 => limit w tej konfiguracji praktycznie nie działa
+	float share_exceeding_dunbar() {
+		if empty(player) or dunbar_limit <= 0 { return 0.0; }
+		return length(player where (each.distinct_partners_in_window() > dunbar_limit)) / length(player);
+	}
+
+	reflex track_forgets {
+		forgets_last_cycle <- nb_forgets_total - nb_forgets_prev;
+		nb_forgets_prev <- nb_forgets_total;
+	}
+
 	bool payoffs_valid() {
 		if game_type = "PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P > payoff_S; }
 		if game_type = "weak_PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P = payoff_S; }
@@ -313,7 +340,8 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 				create player {
 					character <- character_pool[i];
 					do apply_character_params();
-					do setup_lists();
+					// mapy per przeciwnik zakładane leniwie przy pierwszej grze (ensure_partner) -
+					// zamiast O(N^2) setup_lists; bez losowania, więc wyniki bez zmian
 					if real_env {
 						do init_on_network();
 					}
@@ -391,6 +419,10 @@ species game{
 
 	init {
 		nb_game <- nb_game + 1;
+		player first_player <- p1;
+		player second_player <- p2;
+		ask p1 { do ensure_partner(second_player); }
+		ask p2 { do ensure_partner(first_player); }
 		p1_move <- p1.strategy(p2);
 		p2_move <- p2.strategy(p1);
 		// THS IS SETTELED p1.move;
@@ -483,6 +515,9 @@ species game{
 //		p2 move: " + p2_move + ". p1 move: " + p1_move + ".
 //		p2 score: " + p2.score + ". p1 score: " + p1.score + ".";
 
+		ask p1 { do touch_partner(second_player); }
+		ask p2 { do touch_partner(first_player); }
+
 		if log_games {
 			write "" + nb_game + "," + cycle + "," + p1 + "," + p2 + "," + p1_move + "," + p2_move + "," + p1.score + "," + p2.score;
 			save [nb_game,cycle,p1,p2,p1_move,p2_move,p1.score,p2.score]
@@ -509,7 +544,9 @@ species player skills: [moving] {
 	int height <- 0;
 	float score <- 0.0;
 	float for_chart -> nb_games > 0 ? (score / nb_games * 1000) : 0.0;
-	list<player> close -> player at_distance(vision_radius);
+	list<player> known_others;               // LRU: najdawniej widziany na początku
+	map<player, int> last_met_cycle;         // tylko metryka okna - nie jest pamięcią strategii
+	int nb_forgotten <- 0;
 	string character;
 	player enemy;
 	float forgiveness  <- 0.05;
@@ -665,18 +702,59 @@ species player skills: [moving] {
 	float discount <- 0.9;
 	float epsilon <- 0.15;
 
-	action setup_lists() {
-		ask player where (each != self) {
-			myself.lists_per_other[self] <- [];
-			myself.my_moves_per_other[self] <- [];
-			myself.q_d_per_other[self] <- map<string, float>([]);
-			myself.q_c_per_other[self] <- map<string, float>([]);
-
-			self.lists_per_other[myself] <- [];
-			self.my_moves_per_other[myself] <- [];
-			self.q_d_per_other[myself] <- map<string, float>([]);
-			self.q_c_per_other[myself] <- map<string, float>([]);
+	// świeży wpis dla partnera - jak dla nowo poznanego (także po zapomnieniu)
+	action ensure_partner(player other) {
+		if not (other in lists_per_other.keys) {
+			lists_per_other[other] <- [];
+			my_moves_per_other[other] <- [];
+			q_d_per_other[other] <- map<string, float>([]);
+			q_c_per_other[other] <- map<string, float>([]);
 		}
+	}
+
+	// używane w testach: zakłada wpisy dla wszystkich par z udziałem self
+	action setup_lists() {
+		loop other over: player where (each != self) {
+			do ensure_partner(other);
+			ask other { do ensure_partner(myself); }
+		}
+	}
+
+	// Moduł 1: odśwież partnera na końcu LRU; przy przekroczeniu limitu zapomnij najdawniej widzianego.
+	// Zapominanie jednostronne: other nadal pamięta self.
+	action touch_partner(player other) {
+		remove other from: known_others;
+		known_others <+ other;
+		last_met_cycle[other] <- cycle;
+		if dunbar_limit > 0 {
+			loop while: length(known_others) > dunbar_limit {
+				do forget_partner(first(known_others));
+			}
+		}
+	}
+
+	// usuwa partnera ze WSZYSTKICH map indeksowanych przeciwnikiem;
+	// pamięć miejsc (personal_feedback, betrayal_count_at_location) zostaje
+	action forget_partner(player other) {
+		remove other from: known_others;
+		remove key: other from: lists_per_other;
+		remove key: other from: my_moves_per_other;
+		remove key: other from: q_c_per_other;
+		remove key: other from: q_d_per_other;
+		remove key: other from: pending_state;
+		remove key: other from: pending_action;
+		remove key: other from: social_feedback;
+		nb_forgotten <- nb_forgotten + 1;
+		nb_forgets_total <- nb_forgets_total + 1;
+	}
+
+	int distinct_partners_in_window() {
+		int since <- cycle - partner_window;
+		// przycinanie starych wpisów trzyma mapę małą
+		loop k over: copy(last_met_cycle.keys) {
+			if last_met_cycle[k] < since { remove key: k from: last_met_cycle; }
+		}
+		return length(last_met_cycle);
 	}
 
 	// nowy stan zawsze startuje z priorem initial_cooperation_bias - niezależnie od tego,
@@ -881,24 +959,27 @@ species player skills: [moving] {
 		return action_chosen;
 	}
 
-	reflex do_you_wanna_play when: !empty(close - self) and (unlimited_games or height = 0) {
+	reflex do_you_wanna_play when: unlimited_games or height = 0 {
+		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
+		list<player> nearby <- (player at_distance(vision_radius)) - [self];
+		if !empty(nearby) {
+			enemy <- one_of(nearby);
 
-		enemy <- one_of(close - [self]);
+			if enemy != nil and (unlimited_games or enemy.height = 0) {
 
-		if enemy != nil and (unlimited_games or enemy.height = 0) {
+				player a <- self;
+				player b <- enemy;
 
-			player a <- self;
-			player b <- enemy;
+				string key <- world.pair_key(a,b);
 
-			string key <- world.pair_key(a,b);
+				if !(key in world.active_pairs.keys) {
+					point pn1 <- self.location;
+					point pn2 <- enemy.location;
 
-			if !(key in world.active_pairs.keys) {
-				point pn1 <- self.location;
-				point pn2 <- enemy.location;
+					create game(p1:a,p2:b,location:(pn1 + pn2) / 2, pair_key:key) returns: new_games;
 
-				create game(p1:a,p2:b,location:(pn1 + pn2) / 2, pair_key:key) returns: new_games;
-
-				world.active_pairs[key] <- first(new_games);
+					world.active_pairs[key] <- first(new_games);
+				}
 			}
 		}
 	}
@@ -973,6 +1054,9 @@ experiment PD type: gui {
 	parameter "S (frajer)" var: payoff_S category: "Gra";
 	parameter "TFT/TF2T/WSLS zaczynają od C" var: classic_start_cooperate category: "Gra";
 
+	parameter "Limit Dunbara (0 = brak)" var: dunbar_limit min: 0 category: "Moduł 1 – Dunbar";
+	parameter "Okno metryki partnerów (cykle)" var: partner_window min: 1 category: "Moduł 1 – Dunbar";
+
 	parameter "Pomiar czasu cyklu" var: perf_log category: "Diagnostyka";
 	parameter "Okno pomiaru (cykle)" var: perf_interval min: 1 category: "Diagnostyka";
 	parameter "Eksport odcisku regresyjnego" var: regression_export category: "Diagnostyka";
@@ -993,6 +1077,13 @@ experiment PD type: gui {
 				loop p_s over: player{
 					data "" + p_s + p_s.character + " score" value: p_s.for_chart;
 				}
+			}
+		}
+		display dunbar type: 2d refresh: every(10 #cycle) {
+			chart "Pamięć partnerów" type: series {
+				data "średnio znanych partnerów" value: world.mean_known_partners();
+				data "różni partnerzy w oknie" value: world.mean_distinct_partners_window();
+				data "zapomnienia / cykl" value: forgets_last_cycle;
 			}
 		}
 		display agent_memory {
@@ -1433,5 +1524,133 @@ experiment test_classic_start_switch type: test {
             if first(wsls).strategy(opp) = "D" { d_off <- d_off + 1; }
         }
         assert d_off > 100 and d_off < 200;   // ~150 z 300
+    }
+}
+
+experiment test_lazy_partner_init type: test {
+    test "mapy per przeciwnik powstają przy pierwszej grze, bez setup_lists" {
+        log_games <- false;
+        unlimited_games <- true;
+        create player(character: "TFT") number: 2 returns: pair;
+        player a <- pair[0];
+        player b <- pair[1];
+        assert not (b in a.lists_per_other.keys);
+        create game(p1: a, p2: b, pair_key: "t") number: 1;
+        assert length(a.lists_per_other[b]) = 1;
+        assert length(b.lists_per_other[a]) = 1;
+        assert a.known_others = [b];
+    }
+}
+
+experiment test_forget_clears_all_maps type: test {
+    test "zapomnienie usuwa partnera ze wszystkich map per przeciwnik (jednostronnie)" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        dunbar_limit <- 0;
+        create player(character: "QLEARN") number: 2 returns: pair;
+        player a <- pair[0];
+        player b <- pair[1];
+        ask a { do setup_lists(); }
+        create game(p1: a, p2: b, pair_key: "t") number: 1;
+
+        assert b in a.lists_per_other.keys;
+        assert b in a.my_moves_per_other.keys;
+        assert b in a.q_c_per_other.keys;
+        assert b in a.q_d_per_other.keys;
+        assert b in a.pending_state.keys;
+        assert b in a.pending_action.keys;
+        assert b in a.social_feedback.keys;
+        assert b in a.known_others;
+
+        ask a { do forget_partner(b); }
+
+        assert not (b in a.lists_per_other.keys);
+        assert not (b in a.my_moves_per_other.keys);
+        assert not (b in a.q_c_per_other.keys);
+        assert not (b in a.q_d_per_other.keys);
+        assert not (b in a.pending_state.keys);
+        assert not (b in a.pending_action.keys);
+        assert not (b in a.social_feedback.keys);
+        assert not (b in a.known_others);
+        assert a.nb_forgotten = 1;
+
+        assert a in b.lists_per_other.keys;   // b nadal pamięta a
+        assert a in b.known_others;
+    }
+}
+
+experiment test_lru_keeps_most_recent type: test {
+    test "LRU zapomina najdawniej widzianego, nigdy ostatniego" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        dunbar_limit <- 2;
+        create player(character: "ALLC") number: 4 returns: ps;
+        player a <- ps[0];
+        player b <- ps[1];
+        player c <- ps[2];
+        player d <- ps[3];
+
+        create game(p1: a, p2: b, pair_key: "ab1") number: 1;
+        create game(p1: a, p2: c, pair_key: "ac1") number: 1;
+        assert a.known_others = [b, c];
+
+        create game(p1: a, p2: b, pair_key: "ab2") number: 1;   // b odświeżony
+        assert a.known_others = [c, b];
+
+        create game(p1: a, p2: d, pair_key: "ad1") number: 1;   // wypada c, nie b
+        assert a.known_others = [b, d];
+        assert not (c in a.lists_per_other.keys);
+        assert b in a.lists_per_other.keys;
+        assert length(a.lists_per_other[b]) = 2;   // historia z b zachowana
+
+        // partner bieżącej gry nigdy nie wypada, nawet przy limicie 1
+        dunbar_limit <- 1;
+        create game(p1: a, p2: c, pair_key: "ac2") number: 1;
+        assert a.known_others = [c];
+    }
+}
+
+experiment test_anchor_full_after_forget type: test {
+    test "po zapomnieniu kotwica wraca do pełnej siły" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        anchor_decay_rate <- 0.15;
+        create player(character: "QLEARN", character_strength: 0.8) number: 2 returns: pair;
+        player a <- pair[0];
+        player b <- pair[1];
+        loop i from: 1 to: 5 {
+            create game(p1: a, p2: b, pair_key: "ab" + i) number: 1;
+        }
+        assert a.effective_anchor_strength(b) < 0.8;
+
+        ask a { do forget_partner(b); }
+        ask a { do ensure_partner(b); }   // ponowne spotkanie
+        assert abs(a.effective_anchor_strength(b) - 0.8) < 0.001;
+    }
+}
+
+experiment test_pending_action_sync_with_dunbar type: test {
+    test "pending_action zgodne z zagranym ruchem przy włączonym limicie i rozbitej szybie" {
+        log_games <- false;
+        unlimited_games <- true;
+        dunbar_limit <- 1;
+        broken_windows_sensitivity <- 1.0;
+        create player(character: "QLEARN", epsilon: 0.0, initial_cooperation_bias: 1.0) number: 1 returns: learners;
+        create player(character: "ALLC") number: 2 returns: opps;
+        player a <- first(learners);
+        ask environment_cell { disorder <- 0.5; }
+
+        bool mismatch <- false;
+        loop i from: 1 to: 50 {
+            player opp <- opps[i mod 2];
+            create game(p1: a, p2: opp, pair_key: "g" + i) number: 1;
+            if a.pending_action[opp] != last(a.my_moves_per_other[opp]) { mismatch <- true; }
+            if length(a.known_others) != 1 { mismatch <- true; }
+        }
+        assert not mismatch;
+        assert a.nb_forgotten = 49;   // zmiana partnera co grę przy limicie 1
     }
 }
