@@ -1475,8 +1475,9 @@ class Model:
         return self.nb_exploitations / self.nb_game if self.nb_game else 0.0
 
     def mean_games_per_partner(self):
-        g = [p for p in self.players if p.last_met_cycle]
-        return sum(p.nb_games / len(p.last_met_cycle) for p in g) / len(g) if g else 0.0
+        # U4: met_count (nieprzycinany) zamiast last_met_cycle, które przycina distinct_partners_in_window
+        g = [p for p in self.players if p.met_count]
+        return sum(p.nb_games / len(p.met_count) for p in g) / len(g) if g else 0.0
 
     def mean_known_partners(self):
         return sum(len(p.known_others) for p in self.players) / len(self.players) if self.players else 0.0
@@ -2367,6 +2368,20 @@ def t_network_cleanup():
             assert not stuck and not on_island
         else:
             assert stuck and on_island                                  # zachowanie jak w PD.gaml
+
+
+def t_games_per_partner_unaffected_by_window():
+    # U4: przycięcie okna partnerów (partner_window) nie zmienia gier na partnera
+    m = _test_model(log_games=False, unlimited_games=True, broken_windows_sensitivity=0.0, partner_window=1)
+    a, b, c = (m.create_player("ALLC") for _ in range(3))
+    for i in range(4):
+        _game(m, a, b, "ab%d" % i)
+    _game(m, a, c, "ac")
+    m.cycle = 10
+    before = m.mean_games_per_partner()
+    m.mean_distinct_partners_window()              # przycina last_met_cycle
+    assert m.mean_games_per_partner() == before
+    assert abs(before - (5 / 2 + 4 / 1 + 1 / 1) / 3) < 1e-9
 
 
 def t_smoke_full_run():

@@ -112,9 +112,10 @@ global {
 	}
 
 	// średnio gier na jednego różnego partnera (miara "iterowania" gry); wymaga dużego partner_window
+	// U4: met_count (nieprzycinany) zamiast last_met_cycle, które przycina distinct_partners_in_window
 	float mean_games_per_partner() {
-		list<player> g <- player where (!empty(each.last_met_cycle));
-		return empty(g) ? 0.0 : mean(g collect (each.nb_games / length(each.last_met_cycle)));
+		list<player> g <- player where (!empty(each.met_count));
+		return empty(g) ? 0.0 : mean(g collect (each.nb_games / length(each.met_count)));
 	}
 
 	float mean_known_partners() {
