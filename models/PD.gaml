@@ -9,8 +9,9 @@ model PD
 
 global {
 	/** Insert the global definitions, variables and actions here */
-	file park_boundary_shapefile <- file("../includes/gis/drogi.geojson");
-	file park_paths_shapefile <- file("../includes/gis/drogi.geojson");
+	string network_file <- "../includes/gis/drogi.geojson";   // sieć ścieżek (też pliki z QGIS; później labirynt)
+	file park_boundary_shapefile <- file(network_file);
+	file park_paths_shapefile <- file(network_file);
 	graph path_network;
 
 	bool real_env <- true;
@@ -183,20 +184,149 @@ global {
 		}
 	}
 
-	// --- Moduł 3: pokrewieństwo (reguła Hamiltona) - PROPOZYCJA, NIEZAIMPLEMENTOWANE ---
-	// Cel: sprawdzić rb > c (Hamilton) razem z P1-P3.
-	// 1. Stałe grupy rodzinne: przy tworzeniu graczy global kin_group_size (np. 5) dzieli populację na
-	//    rodziny (int family_id); kin_r (0-1) = współczynnik pokrewieństwa w rodzinie, 0 poza nią.
-	// 2. Wypłata ważona pokrewieństwem (Hamilton/Grafen): przy liczeniu π do ewolucji
-	//    π_eff = π_own + r * π_partner dla gier z krewnym (r = kin_r gdy ten sam family_id); score bez zmian.
-	//    Alternatywa: pełna "inclusive fitness" = π_own + kin_r * średnia π rodziny w oknie.
-	// 3. Rozpoznawanie krewnych: domyślnie pełne (znany family_id); wariant z błędem rozpoznania.
-	// 4. Przestrzeń: rodziny startują w jednym węźle sieci (lepkość populacji) albo losowo - dwa warianty,
-	//    bo sama przestrzeń tworzy "pokrewieństwo" przez lokalną imitację.
-	// 5. Predykcja P4: kooperacja z krewnymi rośnie, gdy kin_r * b > c; w PD z T,R,P,S przyjąć
-	//    b = R - S, c = T - R (przybliżenie donation game) i raportować próg kin_r* = c / b.
-	// 6. Imitacja/mutacja nie zmienia family_id (dziedziczy się rodzina, nie strategia).
-	// Do decyzji: sposób ważenia (2), start przestrzenny (4), czy strategie mogą warunkować ruch na family_id.
+	// --- Moduł 3 (Hamilton): bonus po planie minimalnym, specyfikacja w CLAUDE.md ---
+
+	// --- Warstwa projektowa: warianty układu sieci ---
+	string network_variant <- "baseline";   // "baseline" = sieć z pliku; "fragmented"; "connected"
+	float edge_removal_fraction <- 0.2;     // fragmented: udział usuwanych krawędzi (bez rozcinania sieci)
+	int shortcut_count <- 20;               // connected: liczba skrótów
+	float shortcut_max_length <- 100.0;     // connected: maks. długość skrótu (m)
+	int net_path_sources <- 100;            // średnia najkrótsza ścieżka liczona z tylu pierwszych węzłów
+	int net_components_baseline <- 0;
+	// charakterystyka sieci (raz na przebieg)
+	int net_nodes <- 0;
+	int net_edges <- 0;
+	float net_mean_degree <- 0.0;
+	float net_avg_path <- 0.0;              // w krokach (krawędziach)
+	float net_density <- 0.0;
+	float net_betw_max <- 0.0;              // betweenness węzłów, znormalizowana przez (n-1)(n-2)/2
+	float net_betw_mean <- 0.0;
+
+	// buduje sieć z pliku i stosuje wariant; ten sam seed -> ta sama modyfikacja
+	action setup_network() {
+		ask path_segment { do die; }
+		create path_segment from: park_paths_shapefile;
+		path_network <- as_edge_graph(path_segment);
+		net_components_baseline <- length(connected_components_of(path_network));
+		if network_variant = "fragmented" {
+			do fragment_network();
+		} else if network_variant = "connected" {
+			do add_shortcuts();
+		}
+		path_network <- as_edge_graph(path_segment);
+	}
+
+	// usuwa krawędzie w losowej kolejności, tylko takie, które nie zwiększają liczby składowych
+	// i nie usuwają węzła (krawędzie w cyklach)
+	action fragment_network() {
+		int target <- round(length(path_segment) * edge_removal_fraction);
+		int n_vertices <- length(path_network.vertices);
+		list<path_segment> kept <- list(path_segment);
+		list<path_segment> removed <- [];
+		loop e over: shuffle(list(path_segment)) {
+			if length(removed) >= target { break; }
+			list<path_segment> trial <- kept - e;
+			graph g <- as_edge_graph(trial);
+			if length(connected_components_of(g)) <= net_components_baseline and length(g.vertices) = n_vertices {
+				kept <- trial;
+				removed <+ e;
+			}
+		}
+		ask removed { do die; }
+	}
+
+	// skróty: proste odcinki między niepołączonymi węzłami bliższymi niż shortcut_max_length
+	action add_shortcuts() {
+		list<point> vs <- list<point>(path_network.vertices);
+		list<list<point>> cand <- [];
+		if length(vs) > 1 {
+			loop i from: 0 to: length(vs) - 2 {
+				list<point> nb <- list<point>(path_network neighbors_of vs[i]);
+				loop j from: i + 1 to: length(vs) - 1 {
+					if (vs[i] distance_to vs[j]) < shortcut_max_length and !(vs[j] in nb) {
+						cand <+ [vs[i], vs[j]];
+					}
+				}
+			}
+		}
+		loop pr over: first(shortcut_count, shuffle(cand)) {
+			create path_segment { shape <- line(pr); }
+		}
+	}
+
+	action compute_network_stats() {
+		net_nodes <- length(path_network.vertices);
+		net_edges <- length(path_network.edges);
+		net_mean_degree <- net_nodes = 0 ? 0.0 : 2 * net_edges / net_nodes;
+		net_density <- net_nodes < 2 ? 0.0 : 2 * net_edges / (net_nodes * (net_nodes - 1));
+		list<point> vs <- list<point>(path_network.vertices);
+		float total <- 0.0;
+		int pairs <- 0;
+		int n_src <- min(net_path_sources, length(vs));
+		if n_src > 0 {
+			loop k from: 0 to: n_src - 1 {
+				map<point, int> dist <- [vs[k]::0];
+				list<point> frontier <- [vs[k]];
+				loop while: !empty(frontier) {
+					list<point> nxt <- [];
+					loop v over: frontier {
+						loop u over: list<point>(path_network neighbors_of v) {
+							if !(u in dist.keys) {
+								dist[u] <- dist[v] + 1;
+								nxt <+ u;
+							}
+						}
+					}
+					frontier <- nxt;
+				}
+				loop d over: dist.values {
+					if d > 0 { total <- total + d; pairs <- pairs + 1; }
+				}
+			}
+		}
+		net_avg_path <- pairs = 0 ? 0.0 : total / pairs;
+		map bc <- betweenness_centrality(path_network);
+		float norm <- net_nodes > 2 ? (net_nodes - 1) * (net_nodes - 2) / 2.0 : 1.0;
+		net_betw_max <- empty(bc) ? 0.0 : float(max(bc.values)) / norm;
+		net_betw_mean <- empty(bc) ? 0.0 : float(mean(bc.values)) / norm;
+	}
+
+	// --- Metryka stabilności sieci spotkań (opisowa) ---
+	// "pamiętany" = partner w known_others (po zapominaniu z limitu Dunbara); "znany" = spotkany kiedykolwiek
+	int encounter_window <- 1000;
+	bool encounter_export <- false;          // macierz komórek do encounter_cells.csv na końcu przebiegu
+	float enc_share_remembered <- 0.0;       // ostatnie okno: średni udział spotkań z partnerem pamiętanym
+	float enc_share_ever <- 0.0;             // ostatnie okno: średni udział spotkań z partnerem spotkanym wcześniej
+	float enc_distinct <- 0.0;               // ostatnie okno: średnio różnych partnerów na agenta
+
+	reflex close_encounter_window when: cycle > 0 and every(encounter_window) {
+		list<player> active <- player where (each.enc_games > 0);
+		enc_share_remembered <- empty(active) ? 0.0 : mean(active collect (each.enc_rep_rem / each.enc_games));
+		enc_share_ever <- empty(active) ? 0.0 : mean(active collect (each.enc_rep_ever / each.enc_games));
+		enc_distinct <- empty(active) ? 0.0 : mean(active collect length(each.enc_partners));
+		ask player {
+			enc_games <- 0;
+			enc_rep_rem <- 0;
+			enc_rep_ever <- 0;
+			enc_partners <- [];
+		}
+		ask environment_cell { do close_window(); }
+	}
+
+	// zdarzenie po każdej grze - punkt zaczepienia dla obserwatorów (Faza 7: świadkowie, image scoring)
+	action on_game_played(game g) {
+		ask g.p1 { do record_encounter(g.p2, g.knew1_rem, g.knew1_ever, g.cell1); }
+		ask g.p2 { do record_encounter(g.p1, g.knew2_rem, g.knew2_ever, g.cell2); }
+	}
+
+	reflex export_encounter_cells when: encounter_export and cycle = end_cycle {
+		loop c over: environment_cell where (each.total_games > 0) {
+			save [variant_name, seed, well_mixed ? "n/a" : network_variant, c.grid_x, c.grid_y, c.total_games,
+				c.total_rep_rem / c.total_games, c.total_rep_ever / c.total_games,
+				c.last_share_rem, c.last_share_ever]
+				to: "../results/encounter_cells.csv" rewrite: false format: "csv" header: true;
+		}
+	}
 
 	// --- Etap 1: eksperyment kompatybilności ---
 	bool compat_core <- false;        // rdzeń: tylko strategie klasyczne; bez disorder, kotwicy, Q-learningu, ruchu środowiskowego/społecznego
@@ -208,7 +338,8 @@ global {
 	int warmup <- 5000;               // cykle wygrzewania przed oceną stabilizacji
 	int stab_window <- 1000;          // okno średniej kroczącej udziałów
 	float stab_eps <- 0.02;           // maks. zmiana średnich (udział ALLD i udział D) między kolejnymi oknami
-	float player_speed <- 2.0;        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
+	float player_speed <- 2.0;
+	string movement_mode <- "default";   // "default": ważony wybór węzła (feedback, relacje); "schelling": Faza 5        // prędkość ruchu graczy po sieci (m/cykl); mniejsza = więcej gier z tymi samymi sąsiadami
 	int stab_k <- 5;                  // (okna: tylko do średnich końcowych; stabilizację ocenia trend poniżej)
 	float stab_trend_eps <- 0.02;     // stabilizacja: |trend udziału ALLD| w 2. połowie przebiegu < 0,02 na 10 000 cykli
 	int tr_n <- 0;                    // sumy do regresji liniowej udziału ALLD względem cyklu
@@ -345,6 +476,7 @@ global {
 		float known_partners <- mean_known_partners();
 		float distinct_partners <- mean_distinct_partners_window();
 		float games_per_partner <- mean_games_per_partner();
+		string net_variant <- well_mixed ? "n/a" : network_variant;
 		float exceeding_dunbar <- share_exceeding_dunbar();
 		bool fixated <- !empty(classic_characters where (world.share_of(each) >= 1.0));
 		float alld_trend <- alld_trend_10k();
@@ -353,7 +485,12 @@ global {
 			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, player_speed, end_cycle,
 			share_TFT, share_ALLC, share_ALLD, share_FTFT, share_TF2T, share_GRIM, share_WSLS, d_share,
 			exploit_last_window, payoff_ALLD, payoff_TFT, payoff_all, known_partners, distinct_partners, games_per_partner,
-			exceeding_dunbar, fixated, stabilized, alld_trend, nb_character_changes]
+			exceeding_dunbar, fixated, stabilized, alld_trend, nb_character_changes,
+			net_variant, well_mixed ? "n/a" : string(net_nodes), well_mixed ? "n/a" : string(net_edges),
+			well_mixed ? "n/a" : string(net_mean_degree), well_mixed ? "n/a" : string(net_avg_path),
+			well_mixed ? "n/a" : string(net_density), well_mixed ? "n/a" : string(net_betw_max),
+			well_mixed ? "n/a" : string(net_betw_mean),
+			enc_share_remembered, enc_share_ever, enc_distinct]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -564,8 +701,8 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 		}
 
 		create park_boundary from: park_boundary_shapefile;
-		create path_segment from: park_paths_shapefile;
-		path_network <- as_edge_graph(path_segment);
+		do setup_network();
+		if compat_export { do compute_network_stats(); }
 
 		map<string,int> counts <- [
 			"QLEARN"::nb_QLEARN,
@@ -609,6 +746,35 @@ species park_boundary {
 grid environment_cell width: grid_cols height: grid_rows neighbors: 8 {
 
 	float disorder <- 0.0;
+	// stabilność spotkań w komórce: bieżące okno, ostatnie zamknięte okno (-1 = brak gier), cały przebieg
+	int enc_games <- 0;
+	int enc_rep_rem <- 0;
+	int enc_rep_ever <- 0;
+	float last_share_rem <- -1.0;
+	float last_share_ever <- -1.0;
+	int total_games <- 0;
+	int total_rep_rem <- 0;
+	int total_rep_ever <- 0;
+
+	action record_encounter(bool rem, bool ever) {
+		enc_games <- enc_games + 1;
+		total_games <- total_games + 1;
+		if rem { enc_rep_rem <- enc_rep_rem + 1; total_rep_rem <- total_rep_rem + 1; }
+		if ever { enc_rep_ever <- enc_rep_ever + 1; total_rep_ever <- total_rep_ever + 1; }
+	}
+
+	action close_window() {
+		last_share_rem <- enc_games = 0 ? -1.0 : enc_rep_rem / enc_games;
+		last_share_ever <- enc_games = 0 ? -1.0 : enc_rep_ever / enc_games;
+		enc_games <- 0;
+		enc_rep_rem <- 0;
+		enc_rep_ever <- 0;
+	}
+
+	aspect encounters {
+		float v <- last_share_rem;
+		draw shape color: v < 0 ? #white : rgb(255 * (1 - v), 255 - 90 * v, 255 * (1 - v)) border: #lightgrey;
+	}
 
 	reflex decay_disorder when: every(10) {
 	    do apply_decay();
@@ -664,12 +830,22 @@ species game{
 	string p1_move;
 	string p2_move;
 	int lifespan <- 10;
+	bool knew1_rem;          // przed grą: p1 pamięta p2 (known_others)
+	bool knew1_ever;         // przed grą: p1 spotkał p2 kiedykolwiek
+	bool knew2_rem;
+	bool knew2_ever;
+	environment_cell cell1;
+	environment_cell cell2;
 
 
 	init {
 		nb_game <- nb_game + 1;
 		player first_player <- p1;
 		player second_player <- p2;
+		knew1_rem <- second_player in p1.known_others;
+		knew1_ever <- second_player in p1.met_count.keys;
+		knew2_rem <- first_player in p2.known_others;
+		knew2_ever <- first_player in p2.met_count.keys;
 		ask p1 { do ensure_partner(second_player); }
 		ask p2 { do ensure_partner(first_player); }
 		p1_move <- p1.strategy(p2);
@@ -683,6 +859,8 @@ species game{
 
 		environment_cell cell_p1 <- environment_cell(p1.location);
 		environment_cell cell_p2 <- environment_cell(p2.location);
+		cell1 <- cell_p1;
+		cell2 <- cell_p2;
 
 		ask p1 {
 			do update_personal_feedback(cell_p1, fb_p1);
@@ -775,6 +953,7 @@ species game{
 
 		ask p1 { do touch_partner(second_player); }
 		ask p2 { do touch_partner(first_player); }
+		ask world { do on_game_played(myself); }
 
 		if log_games {
 			write "" + nb_game + "," + cycle + "," + p1 + "," + p2 + "," + p1_move + "," + p2_move + "," + p1.score + "," + p2.score;
@@ -808,6 +987,12 @@ species player skills: [moving] {
 	float window_payoff <- 0.0;              // Moduł 2: suma wypłat w bieżącym oknie
 	int window_games <- 0;
 	map<player, int> history_offset;         // Moduł 2: GRIM liczy historię od tego miejsca (przejęcie charakteru)
+	// stabilność spotkań (metryka, nie pamięć strategii - zapominanie jej nie rusza)
+	map<player, int> met_count;              // liczba gier z każdym partnerem od początku przebiegu
+	int enc_games <- 0;                      // bieżące okno encounter_window
+	int enc_rep_rem <- 0;
+	int enc_rep_ever <- 0;
+	list<player> enc_partners <- [];
 	string character;
 	player enemy;
 	float forgiveness  <- 0.05;
@@ -856,9 +1041,14 @@ species player skills: [moving] {
 		if model = nil or model = self or not (model.character in evolvable_characters) { return character; }
 		// π nieokreślone, gdy ktoś nie grał w oknie - brak imitacji
 		if window_games = 0 or model.window_games = 0 { return character; }
-		float pi_self <- window_payoff / window_games;
-		float pi_model <- model.window_payoff / model.window_games;
+		float pi_self <- compute_pi();
+		float pi_model <- model.compute_pi();
 		return flip(world.fermi_probability(pi_model, pi_self)) ? model.character : character;
+	}
+
+	// π do ewolucji - jedno miejsce (Moduł 3 doda fitness_mode "inclusive")
+	float compute_pi() {
+		return window_games = 0 ? 0.0 : window_payoff / window_games;
 	}
 
 	// zmiana charakteru: pamięć partnerów zostaje, GRIM zaczyna liczyć zdrady od teraz
@@ -917,6 +1107,14 @@ species player skills: [moving] {
 		location <- current_node;
 	}
 
+	// wybór następnego węzła - jedno miejsce na tryby ruchu (Faza 5: "schelling")
+	point choose_direction(list<point> candidates) {
+		if movement_mode = "schelling" {
+			error "movement_mode = schelling: do implementacji w Fazie 5.";
+		}
+		return weighted_next_node(candidates);
+	}
+
 	point weighted_next_node(list<point> candidates) {
 		map<point, float> weights <- map<point, float>([]);
 		loop c over: candidates {
@@ -933,7 +1131,7 @@ species player skills: [moving] {
 		if empty(neighbors) {
 			target_node <- current_node;
 		} else {
-			target_node <- weighted_next_node(neighbors);
+			target_node <- choose_direction(neighbors);
 			current_node <- target_node;
 		}
 	}
@@ -995,11 +1193,26 @@ species player skills: [moving] {
 	// świeży wpis dla partnera - jak dla nowo poznanego (także po zapomnieniu)
 	action ensure_partner(player other) {
 		if not (other in lists_per_other.keys) {
-			lists_per_other[other] <- [];
-			my_moves_per_other[other] <- [];
-			q_d_per_other[other] <- map<string, float>([]);
-			q_c_per_other[other] <- map<string, float>([]);
+			do init_beliefs_for(other);
 		}
+	}
+
+	// inicjalizacja przekonań o nowym lub zapomnianym partnerze - jedno miejsce
+	// (Faza 6: tu można wstrzyknąć stereotyp miejsca)
+	action init_beliefs_for(player other) {
+		lists_per_other[other] <- [];
+		my_moves_per_other[other] <- [];
+		q_d_per_other[other] <- map<string, float>([]);
+		q_c_per_other[other] <- map<string, float>([]);
+	}
+
+	action record_encounter(player other, bool rem, bool ever, environment_cell cell) {
+		enc_games <- enc_games + 1;
+		if rem { enc_rep_rem <- enc_rep_rem + 1; }
+		if ever { enc_rep_ever <- enc_rep_ever + 1; }
+		if !(other in enc_partners) { enc_partners <+ other; }
+		met_count[other] <- ((other in met_count.keys) ? met_count[other] : 0) + 1;
+		if cell != nil { ask cell { do record_encounter(rem, ever); } }
 	}
 
 	// używane w testach: zakłada wpisy dla wszystkich par z udziałem self
@@ -1370,6 +1583,12 @@ experiment PD type: gui {
 	parameter "Macierz wypłat" var: payoff_preset among: ["custom", "PD_classic", "weak_PD", "snowdrift"] category: "Etap 1 – zgodność";
 	parameter "Eksport compat_results.csv" var: compat_export category: "Etap 1 – zgodność";
 	parameter "Prędkość graczy (m/cykl)" var: player_speed min: 0.0 category: "Etap 1 – zgodność";
+	parameter "Wariant sieci" var: network_variant among: ["baseline", "fragmented", "connected"] category: "Warstwa projektowa";
+	parameter "Plik sieci ścieżek" var: network_file category: "Warstwa projektowa";
+	parameter "Udział usuwanych krawędzi (fragmented)" var: edge_removal_fraction min: 0.0 max: 0.9 category: "Warstwa projektowa";
+	parameter "Liczba skrótów (connected)" var: shortcut_count min: 0 category: "Warstwa projektowa";
+	parameter "Maks. długość skrótu (m)" var: shortcut_max_length min: 0.0 category: "Warstwa projektowa";
+	parameter "Okno metryki spotkań (cykle)" var: encounter_window min: 1 category: "Stabilność spotkań";
 	parameter "Eksport szeregów czasowych" var: timeseries_export category: "Diagnostyka";
 	parameter "Co ile cykli próbka" var: sample_interval min: 1 category: "Diagnostyka";
 
@@ -1400,6 +1619,13 @@ experiment PD type: gui {
 				loop ch over: characters {
 					data ch value: world.share_of(ch);
 				}
+			}
+		}
+		display spotkania {
+			species environment_cell aspect: encounters;
+			species path_segment aspect: default;
+			overlay position: {10, 10} size: {330 #px, 40 #px} background: #white transparency: 0.3 {
+				draw "Udział spotkań z pamiętanym partnerem (ostatnie okno)" at: {10#px, 20#px} color: #black font: font("Arial", 11, #plain);
 			}
 		}
 		display dunbar type: 2d refresh: every(10 #cycle) {
@@ -1580,7 +1806,7 @@ experiment S1_P3_space type: batch repeat: 15 keep_seed: true until: cycle > end
 	parameter "end_cycle" var: end_cycle init: 20000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
-	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
 	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
 	parameter "compat_N" var: compat_N among: [200, 500];
 }
@@ -1599,7 +1825,7 @@ experiment S1_P3_wellmixed type: batch repeat: 15 keep_seed: true until: cycle >
 	parameter "end_cycle" var: end_cycle init: 20000;
 	parameter "vision_radius" var: vision_radius init: 30;
 	parameter "partner_window" var: partner_window init: 1000000000;
-	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
 	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
 	parameter "compat_N" var: compat_N among: [200, 500];
 }
@@ -1623,9 +1849,156 @@ experiment S2_pairs type: batch repeat: 15 keep_seed: true until: cycle > end_cy
 	parameter "partner_window" var: partner_window init: 1000000000;
 	parameter "player_speed" var: player_speed init: 0.1;
 	parameter "compat_N" var: compat_N init: 200;
-	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
 	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
 	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+}
+
+// ===== Plan minimalny (CLAUDE.md): rdzeń z prędkością 0,1, N = 200, 10 powtórzeń =====
+experiment PM2_P12_space type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM2_P12_space";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "network_variant" var: network_variant init: "baseline";
+	parameter "end_cycle" var: end_cycle init: 100000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "snowdrift"];
+}
+
+experiment PM2_P12_wellmixed type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM2_P12_wellmixed";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "end_cycle" var: end_cycle init: 100000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "snowdrift"];
+}
+
+experiment PM2_P3_space type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM2_P3_space";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "network_variant" var: network_variant init: "baseline";
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "snowdrift"];
+}
+
+experiment PM2_P3_wellmixed type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM2_P3_wellmixed";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "snowdrift"];
+}
+
+// warstwa projektowa: P1 i P3 w PD (tu P1 odtworzyła się przy prędkości 0,1) na trzech wariantach sieci
+experiment PM3_P1_network type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM3_P1_network";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 100000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate init: 0.01;
+	parameter "payoff_preset" var: payoff_preset init: "PD_classic";
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+}
+
+experiment PM3_P3_network type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM3_P3_network";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "payoff_preset" var: payoff_preset init: "PD_classic";
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50, 150];
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+}
+
+// heatmapa stabilności spotkań: jeden reprezentatywny przebieg na wariant sieci (konfiguracja P1)
+experiment PM4_heatmap type: batch repeat: 1 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM4_heatmap";
+	parameter "prediction" var: prediction init: "heatmap";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "encounter_export" var: encounter_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "mutation_rate" var: mutation_rate init: 0.01;
+	parameter "payoff_preset" var: payoff_preset init: "PD_classic";
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
 }
 
 // Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
@@ -2294,5 +2667,72 @@ experiment test_payoff_presets type: test {
             ask world { do apply_payoff_preset(); }
             assert world.payoffs_valid();
         }
+    }
+}
+
+experiment test_network_variants type: test {
+    test "fragmented nie rozcina sieci i nie usuwa węzłów; connected dodaje skróty" {
+        network_variant <- "baseline";
+        ask world { do setup_network(); }
+        int comps0 <- length(connected_components_of(path_network));
+        int nodes0 <- length(path_network.vertices);
+        int edges0 <- length(path_segment);
+
+        network_variant <- "fragmented";
+        edge_removal_fraction <- 0.2;
+        ask world { do setup_network(); }
+        assert length(connected_components_of(path_network)) <= comps0;
+        assert length(path_network.vertices) = nodes0;
+        assert length(path_segment) < edges0;
+
+        network_variant <- "connected";
+        shortcut_count <- 10;
+        ask world { do setup_network(); }
+        assert length(path_segment) > edges0;
+        assert length(connected_components_of(path_network)) <= comps0;
+    }
+
+    test "ten sam seed daje tę samą sieć" {
+        network_variant <- "fragmented";
+        seed <- 7.0;
+        ask world { do setup_network(); }
+        float len1 <- sum(path_segment collect each.shape.perimeter);
+        int n1 <- length(path_segment);
+        seed <- 7.0;
+        ask world { do setup_network(); }
+        assert length(path_segment) = n1;
+        assert abs(sum(path_segment collect each.shape.perimeter) - len1) < 0.001;
+    }
+}
+
+experiment test_encounter_metric type: test {
+    test "spotkania powtórne: pamiętany vs spotkany kiedykolwiek (po zapomnieniu)" {
+        log_games <- false;
+        unlimited_games <- true;
+        broken_windows_sensitivity <- 0.0;
+        dunbar_limit <- 1;
+        create player(character: "ALLC") number: 3 returns: ps;
+        player a <- ps[0];
+        create game(p1: a, p2: ps[1], pair_key: "g1") number: 1;   // nowy
+        create game(p1: a, p2: ps[1], pair_key: "g2") number: 1;   // pamiętany i znany
+        create game(p1: a, p2: ps[2], pair_key: "g3") number: 1;   // nowy -> ps[1] zapomniany
+        create game(p1: a, p2: ps[1], pair_key: "g4") number: 1;   // niepamiętany, ale znany
+        assert a.enc_games = 4;
+        assert a.enc_rep_rem = 1;
+        assert a.enc_rep_ever = 2;
+        assert length(a.enc_partners) = 2;
+        assert a.met_count[ps[1]] = 3;
+    }
+}
+
+experiment test_hooks_preserve_behaviour type: test {
+    test "compute_pi i init_beliefs_for działają jak poprzedni kod" {
+        create player(character: "ALLC", window_payoff: 12.0, window_games: 4) number: 1 returns: me;
+        create player(character: "ALLD") number: 1 returns: other;
+        assert first(me).compute_pi() = 3.0;
+        assert first(other).compute_pi() = 0.0;
+        ask first(me) { do init_beliefs_for(first(other)); }
+        assert first(me).lists_per_other[first(other)] = [];
+        assert empty(first(me).q_c_per_other[first(other)]);
     }
 }

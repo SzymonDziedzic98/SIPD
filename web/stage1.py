@@ -14,10 +14,16 @@ Kryteria werdyktów (FIX = 0.05, zob. docs/gamadays.md):
   ma |nachylenie| < 0,02 na 10 000 cykli. "tak" gdy spełnia >= 80% powtórzeń, "nie" gdy <= 20%, inaczej "warunkowo".
 - P2: mutation_rate = 0 -> ALLC wymiera (udział < 1/N) w >= 80% powtórzeń; mutation_rate > 0 ->
   ALLC obecny (> 0) w >= 80% powtórzeń i średnio <= 0.2. "tak" gdy obie części, "warunkowo" gdy jedna.
-- P3: zysk oszustów = wypłata ALLD na grę przy limicie L minus przy braku limitu; istotny, gdy
-  95% przedział ufności różnicy jest > 0. "tak" gdy istotny przy L=5 i średni zysk nie rośnie
-  z L (5 >= 15 >= 50), "warunkowo" gdy istotny tylko częściowo, "nie" gdy nieistotny przy L=5.
-  Próg = największy L z istotnym zyskiem. Raportowane też: czy limit działa (distinct > L).
+- P1 oceniane tylko przy mutation_rate > 0 (bez mutacji fiksacja jest stanem pochłaniającym).
+- P3 (miara główna, CLAUDE.md): kooperacja spada przy limicie = udział D przy L=5 większy niż bez
+  limitu (95% CI różnicy > 0); "nie", gdy CI < 0 (kooperacja rośnie) albo różnica nieistotna.
+  Próg = największy L z istotnym spadkiem.
+- P3 (miara dodatkowa): zysk oszustów = wypłata ALLD na grę przy L minus bez limitu; "tak" gdy istotny
+  przy L=5 i nie rośnie z L. Próg = największy L z istotnym zyskiem. Raportowane: czy limit działa.
+- Klasyfikacja (tabela zbiorcza): kolumny = układ (well_mixed / wariant sieci) × macierz;
+  "stała kandydacka" = ten sam werdykt we wszystkich kolumnach, "parametr kontekstowy" = werdykt
+  zależy od układu lub macierzy, "nie odtworzono" = "nie" we wszystkich kolumnach walidacji
+  (baseline i well_mixed).
 - Etap 2 (S2_pairs, ewolucja + limit): P1 i P2 jak wyżej, osobno dla każdego limitu. P3 w ewolucji =
   udział ALLD przy limicie L większy niż bez limitu (95% CI różnicy > 0). Zgodność pary = obie
   predykcje z pary utrzymują się przy tym samym limicie.
@@ -38,6 +44,8 @@ import sipd  # noqa: E402
 
 STAGE1 = ["S1_P12_space", "S1_P12_wellmixed", "S1_P1_mobility", "S1_P3_space", "S1_P3_wellmixed"]
 STAGE2 = ["S2_pairs"]
+PLAN_MIN = ["PM2_P12_space", "PM2_P12_wellmixed", "PM2_P3_space", "PM2_P3_wellmixed", "PM3_P1_network",
+            "PM3_P3_network", "PM4_heatmap"]
 FIX = 0.05
 
 
@@ -45,10 +53,11 @@ def build_jobs(names, n_values, repeat, end_cycle):
     jobs = []
     for name in names:
         spec = sipd.BATCH_EXPERIMENTS[name]
+        rep_n = repeat if repeat else spec["repeat"]
         among = dict(spec["among"])
         among["compat_N"] = [n for n in among["compat_N"] if n in n_values]
         seeder = random.Random(spec["seed"])
-        seeds = [seeder.randrange(2 ** 31) for _ in range(repeat)]   # keep_seed: te same dla kombinacji
+        seeds = [seeder.randrange(2 ** 31) for _ in range(rep_n)]   # keep_seed: te same dla kombinacji
         for vals in itertools.product(*among.values()):
             combo = dict(zip(among.keys(), vals))
             params = dict(spec["params"], **combo)
@@ -64,7 +73,7 @@ def run_job(job):
     params, seed = job
     m = sipd.Model(sipd.Params(**params), seed=seed)
     m.run(params["end_cycle"] + 1)   # until: cycle > end_cycle
-    return m.compat_rows, m.timeseries_rows
+    return m.compat_rows, m.timeseries_rows, m.encounter_rows
 
 
 def run(args):
@@ -73,17 +82,24 @@ def run(args):
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     t0 = time.time()
     ts_out = args.ts_out or args.out.replace(".csv", "_timeseries.csv")
+    enc_out = args.out.replace(".csv", "_encounter_cells.csv")
     with open(args.out, "w", newline="", encoding="utf-8") as f, \
-            open(ts_out, "w", newline="", encoding="utf-8") as ft, Pool(args.workers) as pool:
-        w, wt = csv.writer(f), csv.writer(ft)
+            open(ts_out, "w", newline="", encoding="utf-8") as ft, \
+            open(enc_out, "w", newline="", encoding="utf-8") as fe, Pool(args.workers) as pool:
+        w, wt, we = csv.writer(f), csv.writer(ft), csv.writer(fe)
         w.writerow(sipd.COMPAT_HEADER)
         wt.writerow(sipd.CSV_HEADERS["character_timeseries.csv"])
-        for i, (rows, ts) in enumerate(pool.imap_unordered(run_job, jobs), 1):
+        we.writerow(sipd.CSV_HEADERS["encounter_cells.csv"])
+        for i, (rows, ts, enc) in enumerate(pool.imap_unordered(run_job, jobs), 1):
             w.writerows(rows)
             wt.writerows(ts)
+            we.writerows(enc)
             f.flush()
             ft.flush()
+            fe.flush()
             print("[%d/%d] %.0f s" % (i, len(jobs), time.time() - t0), flush=True)
+    if os.path.getsize(enc_out) < 200:
+        os.remove(enc_out)
     print("zapisano", args.out, "i", ts_out)
 
 
@@ -115,13 +131,19 @@ def fmt(xs, d=2):
     return "%.*f ± %.*f" % (d, m, d, s)
 
 
+def layout(r):
+    if r["well_mixed"]:
+        return "well_mixed"
+    return r.get("network_variant", "baseline") or "baseline"
+
+
 def share_verdict(frac):
     return "tak" if frac >= 0.8 else ("nie" if frac <= 0.2 else "warunkowo")
 
 
 def verdict(path):
     rows = load(path)
-    space = lambda r: "well_mixed" if r["well_mixed"] else "przestrzeń"
+    space = layout
     out = ["# Etap 1 – werdykty (port Pythona)", "",
            "Źródło: `%s`, %d przebiegów. Wartości: średnia ± odchylenie standardowe między powtórzeniami." % (
                os.path.basename(path), len(rows)), ""]
@@ -153,7 +175,7 @@ def verdict(path):
                 key[0], key[1], key[2], key[3], key[4], n, fmt([r["games_per_partner"] for r in g], 1),
                 fmt([r["share_ALLD"] for r in g]),
                 fmt([r["d_share"] for r in g]), fmt([r["share_ALLC"] for r in g], 3),
-                fmt([r["alld_trend_10k"] for r in g], 3),
+                fmt([r.get("alld_trend_10k", 0.0) for r in g], 3),
                 round(100 * sum(r["stabilized"] for r in g) / n), v1, part))
         out += ["", "**P2 łącznie** (obie części muszą się utrzymać):", ""]
         for key, parts in sorted(p2_parts.items()):
@@ -163,39 +185,155 @@ def verdict(path):
 
     p3 = [r for r in rows if r["prediction"] == "P3"]
     if p3:
-        out += ["## P3 – limit Dunbara: zysk oszustów", "",
-                "| układ | macierz | N | limit | n | różnych partnerów | limit działa | ALLD / grę | zysk vs brak limitu (95% CI) | TFT / grę | udział D |",
-                "|---|---|---|---|---|---|---|---|---|---|---|"]
+        out += ["## P3 – limit Dunbara: spadek kooperacji (miara główna) i zysk oszustów (dodatkowa)", "",
+                "| układ | macierz | N | limit | n | różnych partnerów | limit działa | udział D | Δ udziału D vs brak limitu (95% CI) | ALLD / grę | zysk oszustów (95% CI) | TFT / grę |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         summary = []
         keyf = lambda r: (space(r), r["payoff_preset"], int(r["compat_N"]))
         for key, grp in itertools.groupby(sorted(p3, key=keyf), key=keyf):
             g = list(grp)
             base = [r["payoff_ALLD"] for r in g if r["dunbar_limit"] == 0]
-            gains, signif = {}, {}
+            base_d = [r["d_share"] for r in g if r["dunbar_limit"] == 0]
+            gains, signif, dsig = {}, {}, {}
             for lim in sorted({int(r["dunbar_limit"]) for r in g}):
                 gl = [r for r in g if int(r["dunbar_limit"]) == lim]
                 pa = [r["payoff_ALLD"] for r in gl]
-                gain_txt = "—"
+                gain_txt = dtxt = "—"
+                if lim > 0 and len(base_d) > 1 and len(gl) > 1:
+                    dd, lo, hi = ci_diff([r["d_share"] for r in gl], base_d)
+                    dsig[lim] = (lo > 0, hi < 0)
+                    dtxt = "%+.3f [%+.3f, %+.3f]" % (dd, lo, hi)
                 if lim > 0 and len(base) > 1 and len(pa) > 1:
                     d = st.mean(pa) - st.mean(base)
                     se = math.sqrt(st.variance(pa) / len(pa) + st.variance(base) / len(base))
                     gains[lim], signif[lim] = d, d - 1.96 * se > 0
                     gain_txt = "%+.3f [%+.3f, %+.3f]" % (d, d - 1.96 * se, d + 1.96 * se)
                 works = "—" if lim == 0 else "%d%%" % round(100 * st.mean(r["exceeding_dunbar"] for r in gl))
-                out.append("| %s | %s | %d | %d | %d | %s | %s | %s | %s | %s | %s |" % (
+                out.append("| %s | %s | %d | %d | %d | %s | %s | %s | %s | %s | %s | %s |" % (
                     key[0], key[1], key[2], lim, len(gl), fmt([r["distinct_partners"] for r in gl], 1), works,
-                    fmt(pa, 3), gain_txt, fmt([r["payoff_TFT"] for r in gl], 3), fmt([r["d_share"] for r in gl], 3)))
+                    fmt([r["d_share"] for r in gl], 3), dtxt, fmt(pa, 3), gain_txt, fmt([r["payoff_TFT"] for r in gl], 3)))
             if 5 in signif:
-                mono = all(gains[a] >= gains[b] for a, b in zip(sorted(gains), sorted(gains)[1:]))
-                thr = max([l for l, s in signif.items() if s], default=None)
-                v = "tak" if signif[5] and mono else ("nie" if not signif[5] else "warunkowo")
-                summary.append("- %s, %s, N=%d: **%s** (próg: %s)" % (
-                    key[0], key[1], key[2], v, "limit ≤ %d" % thr if thr else "brak"))
+                vc, thr_c = p3_coop_verdict(dsig)
+                ve, thr_e = p3_exploit_verdict(gains, signif)
+                summary.append("- %s, %s, N=%d: spadek kooperacji **%s** (próg: %s); zysk oszustów **%s** (próg: %s)" % (
+                    key[0], key[1], key[2], vc, thr_c, ve, thr_e))
         out += ["", "**P3 łącznie:**", ""] + summary + [""]
     s2 = [r for r in rows if r["prediction"] == "S2"]
     if s2:
         out += verdict_stage2(s2)
+    out += summary_table(rows)
     return "\n".join(out)
+
+
+def p3_coop_verdict(dsig):
+    """dsig[L] = (kooperacja istotnie spada, kooperacja istotnie rośnie)."""
+    if 5 not in dsig:
+        return "—", "—"
+    drops = [l for l, (dn, _) in dsig.items() if dn]
+    v = "tak" if dsig[5][0] else "nie"
+    return v, ("limit ≤ %d" % max(drops)) if drops else ("brak; kooperacja rośnie" if dsig[5][1] else "brak")
+
+
+def p3_exploit_verdict(gains, signif):
+    if 5 not in signif:
+        return "—", "—"
+    mono = all(gains[a] >= gains[b] for a, b in zip(sorted(gains), sorted(gains)[1:]))
+    thr = max([l for l, s in signif.items() if s], default=None)
+    v = "tak" if signif[5] and mono else ("nie" if not signif[5] else "warunkowo")
+    return v, "limit ≤ %d" % thr if thr else "brak"
+
+
+def column_verdicts(rows):
+    """Werdykty per kolumna (układ, macierz[, prędkość]) dla P1, P2, P3 (obie miary)."""
+    speeds = {r.get("player_speed", 2.0) for r in rows}
+    colkey = (lambda r: (layout(r), r["payoff_preset"], r.get("player_speed", 2.0))) if len(speeds) > 1 else \
+        (lambda r: (layout(r), r["payoff_preset"]))
+    res = {}
+    p12 = [r for r in rows if r["prediction"] == "P1P2"]
+    for key, grp in itertools.groupby(sorted(p12, key=colkey), key=colkey):
+        g = list(grp)
+        mut = [r for r in g if r["mutation_rate"] > 0]
+        nomut = [r for r in g if r["mutation_rate"] == 0]
+        if mut:
+            ok1 = [FIX < r["share_ALLD"] < 1 - FIX and FIX < r["d_share"] < 1 - FIX and r["stabilized"] for r in mut]
+            res[("P1", key)] = (share_verdict(sum(ok1) / len(mut)), "ALLD " + fmt([r["share_ALLD"] for r in mut]))
+        parts = []
+        if nomut:
+            parts.append(share_verdict(sum(r["share_ALLC"] < 1.0 / r["compat_N"] for r in nomut) / len(nomut)))
+        if mut:
+            frac = sum(r["share_ALLC"] > 0 for r in mut) / len(mut)
+            parts.append("tak" if frac >= 0.8 and st.mean(r["share_ALLC"] for r in mut) <= 0.2 else
+                         ("nie" if frac <= 0.2 else "warunkowo"))
+        if parts:
+            v = "tak" if all(p == "tak" for p in parts) else ("nie" if all(p == "nie" for p in parts) else "warunkowo")
+            res[("P2", key)] = (v, "ALLC " + fmt([r["share_ALLC"] for r in mut], 3) if mut else "")
+    p3 = [r for r in rows if r["prediction"] == "P3"]
+    for key, grp in itertools.groupby(sorted(p3, key=colkey), key=colkey):
+        g = list(grp)
+        base = [r for r in g if int(r["dunbar_limit"]) == 0]
+        at5 = [r for r in g if int(r["dunbar_limit"]) == 5]
+        if len(base) < 2 or len(at5) < 2:
+            continue
+        dsig, gains, signif = {}, {}, {}
+        for lim in sorted({int(r["dunbar_limit"]) for r in g} - {0}):
+            gl = [r for r in g if int(r["dunbar_limit"]) == lim]
+            _, lo, hi = ci_diff([r["d_share"] for r in gl], [r["d_share"] for r in base])
+            dsig[lim] = (lo > 0, hi < 0)
+            d, lo2, _ = ci_diff([r["payoff_ALLD"] for r in gl], [r["payoff_ALLD"] for r in base])
+            gains[lim], signif[lim] = d, lo2 > 0
+        vc, tc = p3_coop_verdict(dsig)
+        ve, te = p3_exploit_verdict(gains, signif)
+        dd = ci_diff([r["d_share"] for r in at5], [r["d_share"] for r in base])[0]
+        res[("P3 kooperacja", key)] = (vc, "ΔD@5 %+.3f, próg: %s" % (dd, tc))
+        res[("P3 zysk oszustów", key)] = (ve, "Δwypłaty ALLD@5 %+.3f, próg: %s" % (gains[5], te))
+    return res
+
+
+def classify(verdicts):
+    """verdicts: {kolumna: werdykt}. Zwraca klasyfikację regularności."""
+    vals = [v for v in verdicts.values() if v not in ("—", "")]
+    if not vals:
+        return "—"
+    validation = [v for k, v in verdicts.items() if k[0] in ("baseline", "well_mixed")]
+    if validation and all(v == "nie" for v in validation):
+        return "nie odtworzono"
+    if len(set(vals)) == 1:
+        return "stała kandydacka (%s)" % vals[0]
+    deps = []
+    by_matrix, by_layout = {}, {}
+    for k, v in verdicts.items():
+        by_matrix.setdefault(k[1:], set()).add(v)
+        by_layout.setdefault((k[0],) + k[2:], set()).add(v)
+    if any(len(v) > 1 for v in by_matrix.values()):
+        deps.append("układu przestrzeni")
+    if any(len(v) > 1 for v in by_layout.values()):
+        deps.append("macierzy wypłat")
+    return "parametr kontekstowy (zależy od: %s)" % ", ".join(deps or ["kombinacji"])
+
+
+def summary_table(rows):
+    res = column_verdicts(rows)
+    if not res:
+        return []
+    cols = sorted({k for (_, k) in res})
+    regs = [r for r in ("P1", "P2", "P3 kooperacja", "P3 zysk oszustów") if any(k[0] == r for k in res)]
+    head = ["regularność"] + [" / ".join(str(x) for x in c) for c in cols] + ["klasyfikacja"]
+    out = ["## Tabela zbiorcza – klasyfikacja", "",
+           "Kolumny: układ × macierz (× prędkość, jeśli w danych jest kilka). Komórka: werdykt i miara "
+           "(średnia ± odchylenie między powtórzeniami).", "",
+           "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for reg in regs:
+        cells, verdicts = [], {}
+        for c in cols:
+            if (reg, c) in res:
+                v, info = res[(reg, c)]
+                verdicts[c] = v
+                cells.append("**%s** (%s)" % (v, info) if info else "**%s**" % v)
+            else:
+                cells.append("—")
+        out.append("| %s | %s | %s |" % (reg, " | ".join(cells), classify(verdicts)))
+    out.append("")
+    return out
 
 
 def ci_diff(a, b):
@@ -236,7 +374,7 @@ def verdict_stage2(rows):
             out.append("| %s | %g | %d | %d | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s |" % (
                 key[0], key[1], lim, n, works, fmt([r["share_ALLD"] for r in gl]), dtxt,
                 fmt([r["d_share"] for r in gl]), fmt([r["share_ALLC"] for r in gl], 3),
-                fmt([r["alld_trend_10k"] for r in gl], 3),
+                fmt([r.get("alld_trend_10k", 0.0) for r in gl], 3),
                 round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, v3))
             if lim > 0:
                 pairs.append((key, lim, v1, v2, v3))
@@ -254,9 +392,9 @@ def verdict_stage2(rows):
 
 def main():
     ap = argparse.ArgumentParser(description="Etap 1: przebiegi i werdykty")
-    ap.add_argument("--experiments", nargs="*", default=STAGE1, choices=STAGE1 + STAGE2)
+    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN)
     ap.add_argument("--N", nargs="*", type=int, default=[200, 500])
-    ap.add_argument("--repeat", type=int, default=15)
+    ap.add_argument("--repeat", type=int, help="domyślnie: liczba powtórzeń z definicji eksperymentu")
     ap.add_argument("--end-cycle", type=int)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="compat_results.csv")

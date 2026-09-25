@@ -191,6 +191,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
           <select id="layer" aria-label="Warstwa komórek">
             <option value="summary">komórki: średni feedback</option>
             <option value="disorder">komórki: disorder</option>
+            <option value="encounters">komórki: spotkania powtórne</option>
           </select>
         </figcaption>
         <canvas class="map" id="mapMain" width="720" height="720"></canvas>
@@ -523,11 +524,13 @@ function drawMap(canvas, mode) {
   ctx.fillStyle = css("--ground"); ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "rgb(" + neutral + ")"; ctx.fillRect(X(0), Y(0), net.w * s, net.h * s);
   const cw = net.w / snap.cols, ch = net.h / snap.rows;
-  const cells = mode === "personal" ? snap.personal : (mode === "disorder" ? snap.disorder : snap.summary);
+  const cells = mode === "personal" ? snap.personal : (mode === "disorder" ? snap.disorder
+    : (mode === "encounters" ? snap.encounters : snap.summary));
   for (const [idx, v] of Object.entries(cells)) {
     const i = +idx, c = i % snap.cols, r = Math.floor(i / snap.cols);
     let col;
     if (mode === "disorder") col = mix(neutral, accent, Math.min(1, v));
+    else if (mode === "encounters") col = mix(neutral, good, Math.min(1, v));
     else col = v >= 0 ? mix(neutral, good, Math.min(1, v)) : mix(neutral, bad, Math.min(1, -v));
     ctx.fillStyle = "rgb(" + col + ")";
     ctx.fillRect(X(c * cw), Y(r * ch), cw * s + 0.5, ch * s + 0.5);
@@ -577,6 +580,7 @@ function redraw() {
     ["udział D", tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
     ["gier z wyzyskiem", (100 * snap.exploit).toFixed(1) + "%"],
     ["zmian charakteru", snap.changes],
+    ["spotkań z pamiętanym", (100 * snap.enc_rem).toFixed(1) + "%"],
     ["znanych partnerów", snap.known.toFixed(2)],
     ["różnych w oknie", snap.distinct.toFixed(2)],
     ["zapomnień/cykl", snap.forgets],

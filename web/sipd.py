@@ -90,6 +90,17 @@ DEFAULTS = {
     "player_speed": 2.0,
     "stab_k": 5,
     "stab_trend_eps": 0.02,
+    "movement_mode": "default",
+    # warstwa projektowa
+    "network_file": "",
+    "network_variant": "baseline",
+    "edge_removal_fraction": 0.2,
+    "shortcut_count": 20,
+    "shortcut_max_length": 100.0,
+    "net_path_sources": 100,
+    # stabilność spotkań
+    "encounter_window": 1000,
+    "encounter_export": False,
     "vision_radius": 10,
     "world_size": 10,
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
@@ -156,6 +167,15 @@ GUI_PARAMETERS = [
         ("payoff_preset", "Macierz wypłat"),
         ("compat_export", "Eksport compat_results.csv"),
         ("player_speed", "Prędkość graczy (m/cykl)"),
+    ]),
+    ("Warstwa projektowa", [
+        ("network_variant", "Wariant sieci"),
+        ("edge_removal_fraction", "Udział usuwanych krawędzi (fragmented)"),
+        ("shortcut_count", "Liczba skrótów (connected)"),
+        ("shortcut_max_length", "Maks. długość skrótu (m)"),
+    ]),
+    ("Stabilność spotkań", [
+        ("encounter_window", "Okno metryki spotkań (cykle)"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -233,6 +253,121 @@ class PathNetwork:
             if old is None or _polyline_length(old) > length:
                 self.adj[a][b] = list(pl)
                 self.adj[b][a] = list(reversed(pl))
+
+    # --- warstwa projektowa ---------------------------------------------
+    @staticmethod
+    def _edges(adj):
+        return sorted((a, b) for a in adj for b in adj[a] if a < b)
+
+    @staticmethod
+    def _components(adj):
+        seen, comps = set(), 0
+        for v in adj:
+            if v in seen or not adj[v]:
+                continue
+            comps += 1
+            stack = [v]
+            seen.add(v)
+            while stack:
+                x = stack.pop()
+                for y in adj[x]:
+                    if y not in seen:
+                        seen.add(y)
+                        stack.append(y)
+        return comps
+
+    def components(self):
+        return self._components(self.adj)
+
+    def variant(self, kind, rng, fraction=0.2, count=20, max_length=100.0):
+        """Nowa sieć: "fragmented" (usuwa krawędzie w cyklach, bez rozcinania) albo "connected" (skróty)."""
+        if kind == "baseline":
+            return self
+        adj = {v: dict(nb) for v, nb in self.adj.items()}
+        comps0 = self._components(adj)
+        if kind == "fragmented":
+            edges = self._edges(adj)
+            rng.shuffle(edges)
+            target, removed = int(len(edges) * fraction + 0.5), 0
+            for a, b in edges:
+                if removed >= target:
+                    break
+                if len(adj[a]) <= 1 or len(adj[b]) <= 1:      # usunięcie odcięłoby węzeł
+                    continue
+                pa, pb = adj[a].pop(b), adj[b].pop(a)
+                if self._components(adj) > comps0:
+                    adj[a][b], adj[b][a] = pa, pb
+                    continue
+                removed += 1
+        elif kind == "connected":
+            vs = self.vertices
+            cand = [(i, j) for i in range(len(vs)) for j in range(i + 1, len(vs))
+                    if j not in adj[i] and _dist(vs[i], vs[j]) < max_length]
+            rng.shuffle(cand)
+            for i, j in cand[:count]:
+                adj[i][j] = [vs[i], vs[j]]
+                adj[j][i] = [vs[j], vs[i]]
+        else:
+            raise ModelError("Nieznany network_variant: %s" % kind)
+        polylines = [adj[a][b] for a, b in self._edges(adj)]
+        return PathNetwork(polylines, self.width, self.height, self.source + "/" + kind)
+
+    def stats(self, path_sources=100):
+        """Węzły, krawędzie, średni stopień, średnia najkrótsza ścieżka (kroki, z pierwszych węzłów),
+        gęstość, betweenness (Brandes, znormalizowana przez (n-1)(n-2)/2) - max i średnia."""
+        if getattr(self, "_stats", None) is not None and self._stats[0] == path_sources:
+            return self._stats[1]
+        adj = self.adj
+        vs = [v for v in adj if adj[v]]
+        n = len(vs)
+        e = len(self._edges(adj))
+        total = pairs = 0
+        for src in vs[:path_sources]:
+            dist = {src: 0}
+            frontier = [src]
+            while frontier:
+                nxt = []
+                for x in frontier:
+                    for y in adj[x]:
+                        if y not in dist:
+                            dist[y] = dist[x] + 1
+                            nxt.append(y)
+                frontier = nxt
+            total += sum(dist.values())
+            pairs += len(dist) - 1
+        bc = dict.fromkeys(vs, 0.0)
+        for s0 in vs:
+            stack, pred, sigma, dist = [], {v: [] for v in vs}, dict.fromkeys(vs, 0), {s0: 0}
+            sigma[s0] = 1
+            queue = [s0]
+            qi = 0
+            while qi < len(queue):
+                v = queue[qi]
+                qi += 1
+                stack.append(v)
+                for w in adj[v]:
+                    if w not in dist:
+                        dist[w] = dist[v] + 1
+                        queue.append(w)
+                    if dist[w] == dist[v] + 1:
+                        sigma[w] += sigma[v]
+                        pred[w].append(v)
+            delta = dict.fromkeys(vs, 0.0)
+            while stack:
+                w = stack.pop()
+                for v in pred[w]:
+                    delta[v] += sigma[v] / sigma[w] * (1 + delta[w])
+                if w != s0:
+                    bc[w] += delta[w]
+        norm = (n - 1) * (n - 2) / 2.0 if n > 2 else 1.0
+        vals = [x / 2.0 / norm for x in bc.values()]            # nieskierowany: każda para liczona 2x
+        st = dict(net_nodes=n, net_edges=e, net_mean_degree=2 * e / n if n else 0.0,
+                  net_avg_path=total / pairs if pairs else 0.0,
+                  net_density=2 * e / (n * (n - 1)) if n > 1 else 0.0,
+                  net_betw_max=max(vals) if vals else 0.0,
+                  net_betw_mean=sum(vals) / len(vals) if vals else 0.0)
+        self._stats = (path_sources, st)
+        return st
 
     def closest_vertex(self, pt):
         if not self.vertices:
@@ -320,12 +455,32 @@ class PathNetwork:
 # ---------------------------------------------------------------------------
 
 class Cell:
-    __slots__ = ("index", "col", "row", "disorder", "x0", "y0", "w", "h")
+    __slots__ = ("index", "col", "row", "disorder", "x0", "y0", "w", "h", "enc_games", "enc_rep_rem",
+                 "enc_rep_ever", "last_share_rem", "last_share_ever", "total_games", "total_rep_rem",
+                 "total_rep_ever")
 
     def __init__(self, index, col, row, x0, y0, w, h):
         self.index, self.col, self.row = index, col, row
         self.x0, self.y0, self.w, self.h = x0, y0, w, h
         self.disorder = 0.0
+        self.enc_games = self.enc_rep_rem = self.enc_rep_ever = 0
+        self.total_games = self.total_rep_rem = self.total_rep_ever = 0
+        self.last_share_rem = self.last_share_ever = -1.0
+
+    def record_encounter(self, rem, ever):
+        self.enc_games += 1
+        self.total_games += 1
+        if rem:
+            self.enc_rep_rem += 1
+            self.total_rep_rem += 1
+        if ever:
+            self.enc_rep_ever += 1
+            self.total_rep_ever += 1
+
+    def close_window(self):
+        self.last_share_rem = -1.0 if self.enc_games == 0 else self.enc_rep_rem / self.enc_games
+        self.last_share_ever = -1.0 if self.enc_games == 0 else self.enc_rep_ever / self.enc_games
+        self.enc_games = self.enc_rep_rem = self.enc_rep_ever = 0
 
     def apply_decay(self, model):
         self.disorder = self.disorder * model.p.disorder_decay
@@ -346,6 +501,9 @@ class Game:
         m, P = model, model.p
 
         m.nb_game += 1
+        # stan wiedzy PRZED grą (metryka stabilności spotkań)
+        self.knew1_rem, self.knew1_ever = p2 in p1.known_others, p2 in p1.met_count
+        self.knew2_rem, self.knew2_ever = p1 in p2.known_others, p1 in p2.met_count
         p1.ensure_partner(p2)
         p2.ensure_partner(p1)
         self.p1_move = p1.strategy(p2)
@@ -356,6 +514,7 @@ class Game:
         fb_p2 = m.feedback_value(p2_move, p1_move)
         cell_p1 = m.cell_at(p1.location)
         cell_p2 = m.cell_at(p2.location)
+        self.cell1, self.cell2 = cell_p1, cell_p2
 
         p1.update_personal_feedback(cell_p1, fb_p1)
         p1.update_social_feedback(p2, fb_p1)
@@ -415,6 +574,7 @@ class Game:
 
         p1.touch_partner(p2)
         p2.touch_partner(p1)
+        m.on_game_played(self)
 
         if P.log_games:
             row = [m.nb_game, m.cycle, p1.name, p2.name, p1_move, p2_move, p1.score, p2.score]
@@ -444,6 +604,9 @@ class Player:
         self.window_payoff = 0.0
         self.window_games = 0
         self.history_offset = {}
+        self.met_count = {}           # metryka: gry z partnerem od początku (zapominanie jej nie rusza)
+        self.enc_games = self.enc_rep_rem = self.enc_rep_ever = 0
+        self.enc_partners = set()
         self.character = character
         self.enemy = None
         self.forgiveness = 0.05
@@ -510,10 +673,23 @@ class Player:
 
     def ensure_partner(self, other):
         if other not in self.lists_per_other:
-            self.lists_per_other[other] = []
-            self.my_moves_per_other[other] = []
-            self.q_d_per_other[other] = {}
-            self.q_c_per_other[other] = {}
+            self.init_beliefs_for(other)
+
+    def init_beliefs_for(self, other):
+        """Przekonania o nowym/zapomnianym partnerze - jedno miejsce (Faza 6: stereotyp miejsca)."""
+        self.lists_per_other[other] = []
+        self.my_moves_per_other[other] = []
+        self.q_d_per_other[other] = {}
+        self.q_c_per_other[other] = {}
+
+    def record_encounter(self, other, rem, ever, cell):
+        self.enc_games += 1
+        self.enc_rep_rem += rem
+        self.enc_rep_ever += ever
+        self.enc_partners.add(other)
+        self.met_count[other] = self.met_count.get(other, 0) + 1
+        if cell is not None:
+            cell.record_encounter(rem, ever)
 
     def setup_lists(self):
         for other in self.model.players:
@@ -564,9 +740,13 @@ class Player:
             return self.character
         if self.window_games == 0 or model.window_games == 0:
             return self.character
-        pi_self = self.window_payoff / self.window_games
-        pi_model = model.window_payoff / model.window_games
+        pi_self = self.compute_pi()
+        pi_model = model.compute_pi()
         return model.character if self.flip(self.model.fermi_probability(pi_model, pi_self)) else self.character
+
+    def compute_pi(self):
+        """π do ewolucji - jedno miejsce (Moduł 3 doda fitness_mode "inclusive")."""
+        return self.window_payoff / self.window_games if self.window_games else 0.0
 
     def change_character(self, new_char):
         if new_char == self.character:
@@ -752,6 +932,12 @@ class Player:
             s_s += pref * (dist_now - dist_candidate) / max(1.0, self.move_speed)
         return s_s / max(1, len(self.social_feedback))
 
+    def choose_direction(self, candidates):
+        """Wybór następnego węzła - jedno miejsce na tryby ruchu (Faza 5: "schelling")."""
+        if self.model.p.movement_mode == "schelling":
+            raise ModelError("movement_mode = schelling: do implementacji w Fazie 5.")
+        return self.weighted_next_node(candidates)
+
     def weighted_next_node(self, candidates):
         net = self.model.network
         logits = []
@@ -776,7 +962,7 @@ class Player:
             self.target_node = self.current_node
             self.path = None
         else:
-            new_target = self.weighted_next_node(neighbors)
+            new_target = self.choose_direction(neighbors)
             self.path = net.adj[self.current_node][new_target]
             self.path_pos = 0.0
             self.target_node = new_target
@@ -902,6 +1088,9 @@ class Model:
         self.compat_rows = []         # compat_results.csv
 
         P = self.p
+        if geojson is None and P.network_file:
+            with open(P.network_file, encoding="utf-8") as f:
+                geojson = f.read()
         if P.real_env:
             if network is not None:
                 self.network = network
@@ -914,6 +1103,13 @@ class Model:
             self.network = network or PathNetwork.synthetic(n=P.synthetic_grid, spacing=P.synthetic_spacing)
             self.width = self.height = float(P.world_size)
 
+        if P.real_env and P.network_variant != "baseline":
+            # ten sam seed -> ta sama modyfikacja (rng przebiegu, przed tworzeniem agentów - jak w GAML)
+            self.network = self.network.variant(P.network_variant, self.rng, P.edge_removal_fraction,
+                                                P.shortcut_count, P.shortcut_max_length)
+        self.net_stats = self.network.stats(P.net_path_sources) if (P.compat_export and P.real_env) else None
+        self.enc_share_remembered = self.enc_share_ever = self.enc_distinct = 0.0
+        self.encounter_rows = []      # encounter_cells.csv
         cw, ch = self.width / P.grid_cols, self.height / P.grid_rows
         self.cells = [Cell(r * P.grid_cols + c, c, r, c * cw, r * ch, cw, ch)
                       for r in range(P.grid_rows) for c in range(P.grid_cols)]
@@ -1176,7 +1372,38 @@ class Model:
             self.mean_games_per_partner(),
             self.share_exceeding_dunbar(), fixated, abs(self.alld_trend_10k()) < P.stab_trend_eps,
             self.alld_trend_10k(),
-            self.nb_character_changes])
+            self.nb_character_changes]
+            + ([P.network_variant] + [self.net_stats[k] for k in NET_STAT_KEYS]
+               if (self.net_stats and not P.well_mixed) else ["n/a"] * (1 + len(NET_STAT_KEYS)))
+            + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct])
+
+    # --- zdarzenie po grze i metryka stabilności spotkań ----------------------
+    def on_game_played(self, g):
+        """Punkt zaczepienia dla obserwatorów (Faza 7); dziś: metryka stabilności spotkań."""
+        g.p1.record_encounter(g.p2, g.knew1_rem, g.knew1_ever, g.cell1)
+        g.p2.record_encounter(g.p1, g.knew2_rem, g.knew2_ever, g.cell2)
+
+    def _reflex_close_encounter_window(self):
+        active = [p for p in self.players if p.enc_games > 0]
+        if active:
+            self.enc_share_remembered = sum(p.enc_rep_rem / p.enc_games for p in active) / len(active)
+            self.enc_share_ever = sum(p.enc_rep_ever / p.enc_games for p in active) / len(active)
+            self.enc_distinct = sum(len(p.enc_partners) for p in active) / len(active)
+        else:
+            self.enc_share_remembered = self.enc_share_ever = self.enc_distinct = 0.0
+        for p in self.players:
+            p.enc_games = p.enc_rep_rem = p.enc_rep_ever = 0
+            p.enc_partners = set()
+        for c in self.cells:
+            c.close_window()
+
+    def _reflex_export_encounter_cells(self):
+        nv = "n/a" if self.p.well_mixed else self.p.network_variant
+        for c in self.cells:
+            if c.total_games > 0:
+                self.encounter_rows.append([self.p.variant_name, self.seed, nv, c.col, c.row, c.total_games,
+                                            c.total_rep_rem / c.total_games, c.total_rep_ever / c.total_games,
+                                            c.last_share_rem, c.last_share_ever])
 
     def fermi_probability(self, pi_model, pi_self):
         x = -(pi_model - pi_self) / self.p.fermi_k
@@ -1262,6 +1489,10 @@ class Model:
         self.nb_forgets_prev = self.nb_forgets_total
         if P.evolution_on and self.cycle > 0 and self.cycle % P.evolution_interval == 0:
             self.evolution_step()
+        if self.cycle > 0 and self.cycle % P.encounter_window == 0:
+            self._reflex_close_encounter_window()
+        if P.encounter_export and self.cycle == P.end_cycle:
+            self._reflex_export_encounter_cells()
         if P.compat_export and self.cycle > 0 and self.cycle % P.sample_interval == 0:
             self._reflex_track_stability()
         if P.compat_export and self.cycle == P.end_cycle:
@@ -1304,9 +1535,12 @@ class Model:
         if sel is not None:
             for c, v in sel.personal_feedback.items():
                 cells_personal[c.index] = v
+        cells_enc = {}
         for c in self.cells:
             if c.disorder > 1e-4:
                 cells_disorder[c.index] = c.disorder
+            if c.last_share_rem >= 0:
+                cells_enc[c.index] = c.last_share_rem
 
         def links(pl):
             cand = [q for q, v in pl.social_feedback.items() if abs(v) > P.social_link_threshold]
@@ -1328,6 +1562,7 @@ class Model:
             "sel_ch": sel.character if sel is not None else None,
             "players": players,
             "summary": cells_summary, "personal": cells_personal, "disorder": cells_disorder,
+            "encounters": cells_enc, "enc_rem": self.enc_share_remembered, "enc_ever": self.enc_share_ever,
             "nb_game": self.nb_game, "moves_C": self.nb_moves_C, "moves_D": self.nb_moves_D,
             "exploit": self.exploitation_rate(),
             "shares": {c: self.share_of(c) for c in CHARACTERS},
@@ -1349,15 +1584,22 @@ class Model:
 
 TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", "QLEARN", "AQLEARN"]
 
+NET_STAT_KEYS = ["net_nodes", "net_edges", "net_mean_degree", "net_avg_path", "net_density",
+                 "net_betw_max", "net_betw_mean"]
+
 COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed", "payoff_preset",
                  "payoff_T", "payoff_R", "payoff_P", "payoff_S", "evolution_on", "mutation_rate", "fermi_k",
                  "evolution_interval", "dunbar_limit", "vision_radius", "player_speed", "end_cycle",
                  "share_TFT", "share_ALLC", "share_ALLD", "share_FTFT", "share_TF2T", "share_GRIM", "share_WSLS",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
                  "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "alld_trend_10k",
-                 "nb_character_changes"]
+                 "nb_character_changes", "network_variant"] + NET_STAT_KEYS + [
+                 "enc_share_remembered", "enc_share_ever", "enc_distinct"]
 
 CSV_HEADERS = {
+    "encounter_cells.csv": ["variant_name", "seed", "network_variant", "col", "row", "total_games",
+                            "share_repeat_remembered", "share_repeat_ever", "last_window_share_remembered",
+                            "last_window_share_ever"],
     "compat_results.csv": COMPAT_HEADER,
     "character_timeseries.csv": ["variant_name", "seed", "payoff_preset", "compat_N", "well_mixed",
                                  "mutation_rate", "dunbar_limit", "player_speed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
@@ -1428,7 +1670,7 @@ for _space, _wm in (("space", False), ("wellmixed", True)):
                     evolution_on=True, well_mixed=_wm, end_cycle=100000))
     BATCH_EXPERIMENTS["S1_P3_" + _space] = dict(
         repeat=15, until="end_cycle", seed=20261123,
-        among={"dunbar_limit": [0, 5, 15, 50], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
+        among={"dunbar_limit": [0, 5, 15, 50, 150], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
                "compat_N": [200, 500]},
         params=dict(_S1, variant_name="S1_P3_" + _space, prediction="P3", compat_mix="tft_alld",
                     evolution_on=False, well_mixed=_wm))
@@ -1444,10 +1686,42 @@ BATCH_EXPERIMENTS["S1_P1_mobility"] = dict(
 
 BATCH_EXPERIMENTS["S2_pairs"] = dict(
     repeat=15, until="end_cycle", seed=20261123,
-    among={"dunbar_limit": [0, 5, 15, 50], "mutation_rate": [0.0, 0.01],
+    among={"dunbar_limit": [0, 5, 15, 50, 150], "mutation_rate": [0.0, 0.01],
            "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"], "compat_N": [200]},
     params=dict(_S1, variant_name="S2_pairs", prediction="S2", compat_mix="equal", evolution_on=True,
                 well_mixed=False, end_cycle=100000, player_speed=0.1))
+
+
+# plan minimalny (CLAUDE.md): rdzeń z prędkością 0,1, N = 200, 10 powtórzeń
+_PM = dict(_S1, player_speed=0.1, compat_N=200)
+for _space, _wm in (("space", False), ("wellmixed", True)):
+    BATCH_EXPERIMENTS["PM2_P12_" + _space] = dict(
+        repeat=10, until="end_cycle", seed=20261123,
+        among={"mutation_rate": [0.0, 0.01], "payoff_preset": ["PD_classic", "snowdrift"], "compat_N": [200]},
+        params=dict(_PM, variant_name="PM2_P12_" + _space, prediction="P1P2", compat_mix="equal",
+                    evolution_on=True, well_mixed=_wm, end_cycle=100000))
+    BATCH_EXPERIMENTS["PM2_P3_" + _space] = dict(
+        repeat=10, until="end_cycle", seed=20261123,
+        among={"dunbar_limit": [0, 5, 15, 50, 150], "payoff_preset": ["PD_classic", "snowdrift"], "compat_N": [200]},
+        params=dict(_PM, variant_name="PM2_P3_" + _space, prediction="P3", compat_mix="tft_alld",
+                    evolution_on=False, well_mixed=_wm, end_cycle=20000))
+BATCH_EXPERIMENTS["PM3_P1_network"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"network_variant": ["baseline", "fragmented", "connected"], "compat_N": [200]},
+    params=dict(_PM, variant_name="PM3_P1_network", prediction="P1P2", compat_mix="equal", evolution_on=True,
+                mutation_rate=0.01, payoff_preset="PD_classic", well_mixed=False, end_cycle=100000))
+BATCH_EXPERIMENTS["PM3_P3_network"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"dunbar_limit": [0, 5, 15, 50, 150], "network_variant": ["baseline", "fragmented", "connected"],
+           "compat_N": [200]},
+    params=dict(_PM, variant_name="PM3_P3_network", prediction="P3", compat_mix="tft_alld", evolution_on=False,
+                payoff_preset="PD_classic", well_mixed=False, end_cycle=20000))
+BATCH_EXPERIMENTS["PM4_heatmap"] = dict(
+    repeat=1, until="end_cycle", seed=20261123,
+    among={"network_variant": ["baseline", "fragmented", "connected"], "compat_N": [200]},
+    params=dict(_PM, variant_name="PM4_heatmap", prediction="heatmap", compat_mix="equal", evolution_on=True,
+                mutation_rate=0.01, payoff_preset="PD_classic", well_mixed=False, end_cycle=20000,
+                encounter_export=True, timeseries_export=False))
 
 
 def park_grid_for(n_agents):
@@ -1954,6 +2228,67 @@ def t_trend_criterion():
         m.tr = [m.tr[0] + 1, m.tr[1] + t, m.tr[2] + y, m.tr[3] + t * t, m.tr[4] + t * y]
     assert abs(m.alld_trend_10k() - 0.05) < 1e-6
     assert not abs(m.alld_trend_10k()) < m.p.stab_trend_eps
+
+
+def t_network_variants():
+    base = PathNetwork.synthetic(n=12)
+    c0, n0, e0 = base.components(), len([v for v in base.adj if base.adj[v]]), len(PathNetwork._edges(base.adj))
+    frag = base.variant("fragmented", random.Random(7), fraction=0.2)
+    assert frag.components() <= c0
+    assert len([v for v in frag.adj if frag.adj[v]]) == n0          # żaden węzeł nie znika
+    assert len(PathNetwork._edges(frag.adj)) < e0
+    conn = base.variant("connected", random.Random(7), count=10, max_length=100.0)
+    assert len(PathNetwork._edges(conn.adj)) == e0 + 10
+    assert conn.components() <= c0
+    # ten sam seed -> ta sama sieć; inny seed -> zwykle inna
+    again = base.variant("fragmented", random.Random(7), fraction=0.2)
+    assert PathNetwork._edges(again.adj) == PathNetwork._edges(frag.adj)
+    assert base.variant("baseline", random.Random(1)) is base
+
+
+def t_network_stats_known_graph():
+    # ścieżka 4 węzłów: a-b-c-d; średnia najkrótsza ścieżka = (1+2+3+1+1+2+2+1+1+3+2+1)/12 = 20/12
+    net = PathNetwork([[(0, 0), (1, 0)], [(1, 0), (2, 0)], [(2, 0), (3, 0)]], 3, 1, "test")
+    st = net.stats(100)
+    assert st["net_nodes"] == 4 and st["net_edges"] == 3
+    assert abs(st["net_avg_path"] - 20 / 12) < 1e-9
+    assert abs(st["net_mean_degree"] - 1.5) < 1e-9
+    # betweenness środkowych węzłów: 2 pary przez każdy, norm = 3 -> 2/3
+    assert abs(st["net_betw_max"] - 2 / 3) < 1e-9
+
+
+def t_encounter_metric():
+    m = _test_model(log_games=False, unlimited_games=True, broken_windows_sensitivity=0.0, dunbar_limit=1)
+    a, b, c = (m.create_player("ALLC") for _ in range(3))
+    _game(m, a, b, "g1")      # nowy
+    _game(m, a, b, "g2")      # pamiętany i znany
+    _game(m, a, c, "g3")      # nowy; b zapomniany
+    _game(m, a, b, "g4")      # niepamiętany, ale znany
+    assert (a.enc_games, a.enc_rep_rem, a.enc_rep_ever) == (4, 1, 2)
+    assert len(a.enc_partners) == 2 and a.met_count[b] == 3
+    cell = m.cell_at(a.location)
+    assert cell.enc_games >= 4
+    m._reflex_close_encounter_window()
+    # a: pamiętany 1/4, znany 2/4; b (gry g1, g2, g4; pamięta a cały czas): 2/3 i 2/3; c: 0/1 i 0/1
+    assert abs(m.enc_share_remembered - (1 / 4 + 2 / 3 + 0) / 3) < 1e-9
+    assert abs(m.enc_share_ever - (2 / 4 + 2 / 3 + 0) / 3) < 1e-9
+    assert abs(m.enc_distinct - (2 + 1 + 1) / 3) < 1e-9
+    assert a.enc_games == 0 and cell.last_share_rem >= 0
+
+
+def t_hooks_preserve_behaviour():
+    m = _test_model()
+    me = m.create_player("ALLC", window_payoff=12.0, window_games=4)
+    other = m.create_player("ALLD")
+    assert me.compute_pi() == 3.0 and other.compute_pi() == 0.0
+    me.init_beliefs_for(other)
+    assert me.lists_per_other[other] == [] and me.q_c_per_other[other] == {}
+    m.p.movement_mode = "schelling"
+    try:
+        me.choose_direction([0])
+        assert False
+    except ModelError:
+        pass
 
 
 def t_smoke_full_run():
