@@ -177,6 +177,141 @@ global {
 		}
 	}
 
+	// --- Etap 1: eksperyment kompatybilności ---
+	bool compat_core <- false;        // rdzeń: tylko strategie klasyczne; bez disorder, kotwicy, Q-learningu, ruchu środowiskowego/społecznego
+	int compat_N <- 200;              // liczebność populacji w rdzeniu
+	string compat_mix <- "equal";     // "equal": po równo 7 klasycznych; "tft_alld": 80% TFT + 20% ALLD (P3)
+	string payoff_preset <- "custom"; // "PD_classic", "weak_PD", "snowdrift"; "custom" = wartości z parametrów
+	string prediction <- "";          // etykieta wiersza w compat_results.csv
+	bool compat_export <- false;
+	int warmup <- 5000;               // cykle wygrzewania przed oceną stabilizacji
+	int stab_window <- 1000;          // okno średniej kroczącej udziałów
+	float stab_eps <- 0.01;           // maks. zmiana średnich między kolejnymi oknami
+	int stab_k <- 5;                  // tyle kolejnych okien ze zmianą < eps = stabilizacja
+	list<string> classic_characters <- ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"];
+	// stan wykrywania stabilizacji (wektor = udziały 7 klasycznych + udział D w próbce)
+	list<float> stab_sum <- [];
+	int stab_samples <- 0;
+	list<float> stab_prev <- [];
+	list<float> stab_last <- [];
+	int stab_count <- 0;
+	int stabilized_at <- -1;
+	int stab_prev_C <- 0;
+	int stab_prev_D <- 0;
+	int win_games0 <- 0;
+	int win_expl0 <- 0;
+	float exploit_last_window <- 0.0;
+
+	action apply_payoff_preset() {
+		if payoff_preset = "PD_classic" {
+			game_type <- "PD"; payoff_T <- 9.0; payoff_R <- 5.0; payoff_P <- 1.0; payoff_S <- 0.0;
+		} else if payoff_preset = "weak_PD" {
+			game_type <- "weak_PD"; payoff_T <- 1.6; payoff_R <- 1.0; payoff_P <- 0.0; payoff_S <- 0.0;
+		} else if payoff_preset = "snowdrift" {
+			game_type <- "snowdrift"; payoff_T <- 4.0; payoff_R <- 3.0; payoff_S <- 2.0; payoff_P <- 0.0;
+		}
+	}
+
+	// wyłącza wszystko spoza rdzenia i ustala skład populacji
+	action apply_compat_core() {
+		nb_QLEARN <- 0;
+		nb_AQLEARN <- 0;
+		movement_sensitivity <- 0.0;          // losowy ruch po sieci
+		env_influence_qlearn <- 0.0;
+		social_sensitivity_aqlearn <- 0.0;
+		social_learning_boost_aqlearn <- 0.0;
+		broken_windows_sensitivity <- 0.0;
+		character_strength_qlearn <- 0.0;
+		unlimited_games <- true;
+		classic_start_cooperate <- true;
+		if compat_mix = "tft_alld" {
+			nb_ALLD <- round(compat_N * 0.2);
+			nb_TFT <- compat_N - nb_ALLD;
+			nb_ALLC <- 0; nb_FTFT <- 0; nb_TF2T <- 0; nb_GRIM <- 0; nb_WSLS <- 0;
+		} else {
+			int base <- compat_N div 7;
+			int rest <- compat_N mod 7;
+			nb_TFT <- base + (rest > 0 ? 1 : 0);
+			nb_ALLC <- base + (rest > 1 ? 1 : 0);
+			nb_ALLD <- base + (rest > 2 ? 1 : 0);
+			nb_FTFT <- base + (rest > 3 ? 1 : 0);
+			nb_TF2T <- base + (rest > 4 ? 1 : 0);
+			nb_GRIM <- base + (rest > 5 ? 1 : 0);
+			nb_WSLS <- base;
+		}
+	}
+
+	// nazwy mechanizmów spoza rdzenia, które są aktywne (pusta lista = czysty rdzeń)
+	list<string> core_violations() {
+		list<string> v <- [];
+		if nb_QLEARN > 0 or nb_AQLEARN > 0 or !empty(player where (each.character in ["QLEARN", "AQLEARN"])) { v <+ "Q-learning"; }
+		if movement_sensitivity != 0 or !empty(player where (each.sensitivity != 0)) { v <+ "ruch środowiskowy"; }
+		if social_sensitivity_aqlearn != 0 or !empty(player where (each.social_sensitivity != 0)) { v <+ "ruch społeczny"; }
+		if env_influence_qlearn != 0 or social_learning_boost_aqlearn != 0 { v <+ "uczenie środowiskowe/społeczne"; }
+		if broken_windows_sensitivity != 0 { v <+ "rozbita szyba"; }
+		if character_strength_qlearn != 0 or !empty(player where (each.character_strength != 0)) { v <+ "kotwica"; }
+		if !unlimited_games { v <+ "limit gier"; }
+		return v;
+	}
+
+	// średnia krocząca udziałów w oknach stab_window; stabilizacja = stab_k kolejnych okien ze zmianą < stab_eps
+	reflex track_stability when: compat_export and cycle > 0 and every(sample_interval) {
+		list<float> v <- classic_characters collect (world.share_of(each));
+		int d_c <- nb_moves_C - stab_prev_C;
+		int d_d <- nb_moves_D - stab_prev_D;
+		stab_prev_C <- nb_moves_C;
+		stab_prev_D <- nb_moves_D;
+		v <+ ((d_c + d_d) = 0 ? 0.0 : d_d / (d_c + d_d));
+		if cycle > warmup {
+			if empty(stab_sum) { stab_sum <- list_with(length(v), 0.0); }
+			loop i from: 0 to: length(v) - 1 { stab_sum[i] <- stab_sum[i] + v[i]; }
+			stab_samples <- stab_samples + 1;
+			if stab_samples * sample_interval >= stab_window {
+				list<float> mean_v <- stab_sum collect (each / stab_samples);
+				if !empty(stab_prev) {
+					float change <- 0.0;
+					loop i from: 0 to: length(mean_v) - 1 { change <- max(change, abs(mean_v[i] - stab_prev[i])); }
+					stab_count <- change < stab_eps ? stab_count + 1 : 0;
+					if stab_count >= stab_k and stabilized_at < 0 { stabilized_at <- cycle; }
+				}
+				stab_prev <- mean_v;
+				stab_last <- mean_v;
+				stab_sum <- [];
+				stab_samples <- 0;
+				exploit_last_window <- (nb_game - win_games0) = 0 ? 0.0 : (nb_exploitations - win_expl0) / (nb_game - win_games0);
+				win_games0 <- nb_game;
+				win_expl0 <- nb_exploitations;
+			}
+		}
+	}
+
+	// wiersz = przebieg; udziały i udział D to średnie z ostatniego pełnego okna
+	reflex export_compat when: compat_export and cycle = end_cycle {
+		list<float> fin <- empty(stab_last) ? ((classic_characters collect (world.share_of(each))) + [0.0]) : stab_last;
+		float share_TFT <- fin[0];
+		float share_ALLC <- fin[1];
+		float share_ALLD <- fin[2];
+		float share_FTFT <- fin[3];
+		float share_TF2T <- fin[4];
+		float share_GRIM <- fin[5];
+		float share_WSLS <- fin[6];
+		float d_share <- fin[7];
+		float payoff_ALLD <- mean_for("ALLD") / 1000;
+		float payoff_TFT <- mean_for("TFT") / 1000;
+		float payoff_all <- mean_score_all() / 1000;
+		float known_partners <- mean_known_partners();
+		float distinct_partners <- mean_distinct_partners_window();
+		float exceeding_dunbar <- share_exceeding_dunbar();
+		bool fixated <- !empty(classic_characters where (world.share_of(each) >= 1.0));
+		bool stabilized <- stab_count >= stab_k;
+		save [variant_name, prediction, seed, compat_N, well_mixed, payoff_preset, payoff_T, payoff_R, payoff_P, payoff_S,
+			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, end_cycle,
+			share_TFT, share_ALLC, share_ALLD, share_FTFT, share_TF2T, share_GRIM, share_WSLS, d_share,
+			exploit_last_window, payoff_ALLD, payoff_TFT, payoff_all, known_partners, distinct_partners,
+			exceeding_dunbar, fixated, stabilized, stabilized_at, nb_character_changes]
+			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
+	}
+
 	reflex export_timeseries when: timeseries_export and every(sample_interval) {
 		int d_c <- nb_moves_C - ts_prev_C;
 		int d_d <- nb_moves_D - ts_prev_D;
@@ -366,6 +501,8 @@ global {
 	}
 
 	init {
+		do apply_payoff_preset();
+		if compat_core { do apply_compat_core(); }
 		if not payoffs_valid() {
 			error "Macierz wypłat niezgodna z game_type=" + game_type
 				+ " (PD: T>R>P>S, weak_PD: T>R>P=S, snowdrift: T>R>S>P).
@@ -1180,6 +1317,11 @@ experiment PD type: gui {
 	parameter "Szum selekcji K (Fermi)" var: fermi_k min: 0.001 category: "Moduł 2 – ewolucja";
 	parameter "Prawdopodobieństwo mutacji" var: mutation_rate min: 0.0 max: 1.0 category: "Moduł 2 – ewolucja";
 	parameter "Populacja dobrze wymieszana (bez przestrzeni)" var: well_mixed category: "Moduł 2 – ewolucja";
+	parameter "Rdzeń zgodności (compat_core)" var: compat_core category: "Etap 1 – zgodność";
+	parameter "Liczebność rdzenia N" var: compat_N min: 2 category: "Etap 1 – zgodność";
+	parameter "Skład rdzenia" var: compat_mix among: ["equal", "tft_alld"] category: "Etap 1 – zgodność";
+	parameter "Macierz wypłat" var: payoff_preset among: ["custom", "PD_classic", "weak_PD", "snowdrift"] category: "Etap 1 – zgodność";
+	parameter "Eksport compat_results.csv" var: compat_export category: "Etap 1 – zgodność";
 	parameter "Eksport szeregów czasowych" var: timeseries_export category: "Diagnostyka";
 	parameter "Co ile cykli próbka" var: sample_interval min: 1 category: "Diagnostyka";
 
@@ -1312,6 +1454,81 @@ experiment F_broken_windows_anchor type: batch repeat: 30 until: cycle > end_cyc
 	parameter "broken_windows_sensitivity" var: broken_windows_sensitivity init: 0.4;
 	parameter "base_character_qlearn" var: base_character_qlearn init: "TFT";
 	parameter "character_strength_qlearn" var: character_strength_qlearn init: 0.6;
+}
+
+// ===== Etap 1: walidacja pojedyncza (rdzeń + kontrola well_mixed) =====
+// P1 i P2 oceniane na tych samych przebiegach (ewolucja, mutation_rate 0 vs 0,01), P3 bez ewolucji (80% TFT + 20% ALLD).
+// Wiersz compat_results.csv = przebieg; werdykty liczy web/stage1.py --verdict.
+experiment S1_P12_space type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S1_P12_space";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "compat_N" var: compat_N among: [200, 500];
+}
+
+experiment S1_P12_wellmixed type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S1_P12_wellmixed";
+	parameter "prediction" var: prediction init: "P1P2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "compat_N" var: compat_N among: [200, 500];
+}
+
+experiment S1_P3_space type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S1_P3_space";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "compat_N" var: compat_N among: [200, 500];
+}
+
+experiment S1_P3_wellmixed type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "S1_P3_wellmixed";
+	parameter "prediction" var: prediction init: "P3";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "compat_mix" var: compat_mix init: "tft_alld";
+	parameter "evolution_on" var: evolution_on init: false;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "end_cycle" var: end_cycle init: 20000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15, 50];
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "compat_N" var: compat_N among: [200, 500];
 }
 
 // Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
@@ -1946,5 +2163,39 @@ experiment test_pending_action_sync_all_modules type: test {
         }
         assert not mismatch;
         assert a.character = "QLEARN";
+    }
+}
+
+experiment test_compat_core_disables_noncore type: test {
+    test "compat_core wyłącza wszystkie mechanizmy spoza rdzenia i tworzy tylko strategie klasyczne" {
+        // najpierw włącz wszystko, co nie należy do rdzenia
+        nb_QLEARN <- 5; nb_AQLEARN <- 5;
+        movement_sensitivity <- 2.0; env_influence_qlearn <- 0.5;
+        social_sensitivity_aqlearn <- 1.5; social_learning_boost_aqlearn <- 2.0;
+        broken_windows_sensitivity <- 0.4; character_strength_qlearn <- 0.6;
+        unlimited_games <- false;
+        assert length(world.core_violations()) = 7;
+
+        compat_N <- 200;
+        compat_mix <- "equal";
+        ask world { do apply_compat_core(); }
+        assert empty(world.core_violations());
+        assert nb_TFT + nb_ALLC + nb_ALLD + nb_FTFT + nb_TF2T + nb_GRIM + nb_WSLS = 200;
+        assert classic_start_cooperate;
+
+        compat_mix <- "tft_alld";
+        ask world { do apply_compat_core(); }
+        assert nb_ALLD = 40 and nb_TFT = 160;
+        assert nb_ALLC + nb_FTFT + nb_TF2T + nb_GRIM + nb_WSLS = 0;
+    }
+}
+
+experiment test_payoff_presets type: test {
+    test "presety macierzy wypłat przechodzą walidację swojego typu gry" {
+        loop pr over: ["PD_classic", "weak_PD", "snowdrift"] {
+            payoff_preset <- pr;
+            ask world { do apply_payoff_preset(); }
+            assert world.payoffs_valid();
+        }
     }
 }

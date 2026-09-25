@@ -344,7 +344,8 @@ def _csv(name):
            "character_timeseries.csv": M.timeseries_rows}[name]
     return sipd.to_csv(name, src)
 def _batch_csv(name):
-    src = {"ablation_results.csv": B.ablation_rows, "regression_fingerprint.csv": B.fingerprint_rows}[name]
+    src = {"ablation_results.csv": B.ablation_rows, "regression_fingerprint.csv": B.fingerprint_rows,
+           "compat_results.csv": B.compat_rows}[name]
     return sipd.to_csv(name, src)
 def _meta():
     exps = {k: {"repeat": v["repeat"], "until": v["until"], "seed": v.get("seed"),
@@ -742,7 +743,9 @@ function parseCsv(text) {
 function showBatchResults() {
   const abl = parseCsv(py.globals.get("_batch_csv")("ablation_results.csv"));
   const fp = parseCsv(py.globals.get("_batch_csv")("regression_fingerprint.csv"));
-  const use = abl.rows.length ? ["ablation_results.csv", abl] : (fp.rows.length ? ["regression_fingerprint.csv", fp] : null);
+  const cr = parseCsv(py.globals.get("_batch_csv")("compat_results.csv"));
+  const use = cr.rows.length ? ["compat_results.csv", cr]
+    : (abl.rows.length ? ["ablation_results.csv", abl] : (fp.rows.length ? ["regression_fingerprint.csv", fp] : null));
   if (!use) return;
   const [fname, data] = use;
   if (fname === "ablation_results.csv") {

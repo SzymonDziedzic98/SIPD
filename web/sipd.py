@@ -78,6 +78,16 @@ DEFAULTS = {
     "well_mixed": False,
     "timeseries_export": False,
     "sample_interval": 100,
+    "compat_core": False,
+    "compat_N": 200,
+    "compat_mix": "equal",
+    "payoff_preset": "custom",
+    "prediction": "",
+    "compat_export": False,
+    "warmup": 5000,
+    "stab_window": 1000,
+    "stab_eps": 0.01,
+    "stab_k": 5,
     "vision_radius": 10,
     "world_size": 10,
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
@@ -137,6 +147,13 @@ GUI_PARAMETERS = [
         ("evolvable_characters", "Charaktery podlegające ewolucji"),
         ("well_mixed", "Populacja dobrze wymieszana (bez przestrzeni)"),
     ]),
+    ("Etap 1 – zgodność", [
+        ("compat_core", "Rdzeń zgodności (compat_core)"),
+        ("compat_N", "Liczebność rdzenia N"),
+        ("compat_mix", "Skład rdzenia"),
+        ("payoff_preset", "Macierz wypłat"),
+        ("compat_export", "Eksport compat_results.csv"),
+    ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
         ("sample_interval", "Co ile cykli próbka"),
@@ -147,6 +164,11 @@ GUI_PARAMETERS = [
     ]),
 ]
 GAME_TYPES = ["PD", "weak_PD", "snowdrift"]
+PAYOFF_PRESETS = {
+    "PD_classic": ("PD", dict(payoff_T=9.0, payoff_R=5.0, payoff_P=1.0, payoff_S=0.0)),
+    "weak_PD": ("weak_PD", dict(payoff_T=1.6, payoff_R=1.0, payoff_P=0.0, payoff_S=0.0)),
+    "snowdrift": ("snowdrift", dict(payoff_T=4.0, payoff_R=3.0, payoff_S=2.0, payoff_P=0.0)),
+}
 
 
 class ModelError(Exception):
@@ -847,6 +869,18 @@ class Model:
         self.nb_character_changes = 0
         self.ts_prev_C = 0
         self.ts_prev_D = 0
+        # etap 1: stabilizacja
+        self.stab_sum = []
+        self.stab_samples = 0
+        self.stab_prev = []
+        self.stab_last = []
+        self.stab_count = 0
+        self.stabilized_at = -1
+        self.stab_prev_C = 0
+        self.stab_prev_D = 0
+        self.win_games0 = 0
+        self.win_expl0 = 0
+        self.exploit_last_window = 0.0
         self.perf_last_time = 0.0
         self.active_pairs = {}
         self.games = []
@@ -860,6 +894,7 @@ class Model:
         self.fingerprint_rows = []    # regression_fingerprint.csv
         self.perf_rows = []           # perf.csv
         self.timeseries_rows = []     # character_timeseries.csv
+        self.compat_rows = []         # compat_results.csv
 
         P = self.p
         if P.real_env:
@@ -882,6 +917,9 @@ class Model:
     # --- global.init ------------------------------------------------------
     def _init_global(self):
         P = self.p
+        self.apply_payoff_preset()
+        if P.compat_core:
+            self.apply_compat_core()
         if not self.payoffs_valid():
             raise ModelError("Macierz wypłat niezgodna z game_type=%s (PD: T>R>P>S, weak_PD: T>R>P=S, "
                              "snowdrift: T>R>S>P). Aktualnie : T=%s R=%s P=%s S=%s"
@@ -1040,6 +1078,90 @@ class Model:
         d = [_dist(aq[i].location, aq[j].location) for i in range(len(aq)) for j in range(i + 1, len(aq))]
         return sum(d) / len(d)
 
+    # --- etap 1 -----------------------------------------------------------
+    def apply_payoff_preset(self):
+        if self.p.payoff_preset in PAYOFF_PRESETS:
+            gt, pay = PAYOFF_PRESETS[self.p.payoff_preset]
+            self.p.game_type = gt
+            for k, v in pay.items():
+                setattr(self.p, k, v)
+
+    def apply_compat_core(self):
+        P = self.p
+        P.nb_QLEARN = P.nb_AQLEARN = 0
+        P.movement_sensitivity = 0.0
+        P.env_influence_qlearn = 0.0
+        P.social_sensitivity_aqlearn = 0.0
+        P.social_learning_boost_aqlearn = 0.0
+        P.broken_windows_sensitivity = 0.0
+        P.character_strength_qlearn = 0.0
+        P.unlimited_games = True
+        P.classic_start_cooperate = True
+        if P.compat_mix == "tft_alld":
+            P.nb_ALLD = int(round(P.compat_N * 0.2))
+            P.nb_TFT = P.compat_N - P.nb_ALLD
+            P.nb_ALLC = P.nb_FTFT = P.nb_TF2T = P.nb_GRIM = P.nb_WSLS = 0
+        else:
+            base, rest = divmod(P.compat_N, 7)
+            for i, ch in enumerate(CLASSIC):
+                setattr(P, "nb_" + ch, base + (1 if rest > i else 0))
+
+    def core_violations(self):
+        P, v = self.p, []
+        if P.nb_QLEARN > 0 or P.nb_AQLEARN > 0 or any(p.character in LEARNERS for p in self.players):
+            v.append("Q-learning")
+        if P.movement_sensitivity != 0 or any(p.sensitivity != 0 for p in self.players):
+            v.append("ruch środowiskowy")
+        if P.social_sensitivity_aqlearn != 0 or any(p.social_sensitivity != 0 for p in self.players):
+            v.append("ruch społeczny")
+        if P.env_influence_qlearn != 0 or P.social_learning_boost_aqlearn != 0:
+            v.append("uczenie środowiskowe/społeczne")
+        if P.broken_windows_sensitivity != 0:
+            v.append("rozbita szyba")
+        if P.character_strength_qlearn != 0 or any(p.character_strength != 0 for p in self.players):
+            v.append("kotwica")
+        if not P.unlimited_games:
+            v.append("limit gier")
+        return v
+
+    def _reflex_track_stability(self):
+        P = self.p
+        v = [self.share_of(c) for c in CLASSIC]
+        d_c, d_d = self.nb_moves_C - self.stab_prev_C, self.nb_moves_D - self.stab_prev_D
+        self.stab_prev_C, self.stab_prev_D = self.nb_moves_C, self.nb_moves_D
+        v.append(0.0 if d_c + d_d == 0 else d_d / (d_c + d_d))
+        if self.cycle <= P.warmup:
+            return
+        if not self.stab_sum:
+            self.stab_sum = [0.0] * len(v)
+        self.stab_sum = [a + b for a, b in zip(self.stab_sum, v)]
+        self.stab_samples += 1
+        if self.stab_samples * P.sample_interval >= P.stab_window:
+            mean_v = [x / self.stab_samples for x in self.stab_sum]
+            if self.stab_prev:
+                change = max(abs(a - b) for a, b in zip(mean_v, self.stab_prev))
+                self.stab_count = self.stab_count + 1 if change < P.stab_eps else 0
+                if self.stab_count >= P.stab_k and self.stabilized_at < 0:
+                    self.stabilized_at = self.cycle
+            self.stab_prev = self.stab_last = mean_v
+            self.stab_sum, self.stab_samples = [], 0
+            dg = self.nb_game - self.win_games0
+            self.exploit_last_window = 0.0 if dg == 0 else (self.nb_exploitations - self.win_expl0) / dg
+            self.win_games0, self.win_expl0 = self.nb_game, self.nb_exploitations
+
+    def _reflex_export_compat(self):
+        P = self.p
+        fin = self.stab_last or ([self.share_of(c) for c in CLASSIC] + [0.0])
+        fixated = any(self.share_of(c) >= 1.0 for c in CLASSIC)
+        self.compat_rows.append([
+            P.variant_name, P.prediction, self.seed, P.compat_N, P.well_mixed, P.payoff_preset,
+            P.payoff_T, P.payoff_R, P.payoff_P, P.payoff_S, P.evolution_on, P.mutation_rate, P.fermi_k,
+            P.evolution_interval, P.dunbar_limit, P.vision_radius, P.end_cycle] + list(fin) + [
+            self.exploit_last_window, self.mean_for("ALLD") / 1000, self.mean_for("TFT") / 1000,
+            self.mean_score_all() / 1000, self.mean_known_partners(), self.mean_distinct_partners_window(),
+            self.share_exceeding_dunbar(), fixated, self.stab_count >= P.stab_k, self.stabilized_at,
+            self.nb_character_changes])
+
     def fermi_probability(self, pi_model, pi_self):
         x = -(pi_model - pi_self) / self.p.fermi_k
         if x > 50:
@@ -1118,6 +1240,10 @@ class Model:
         self.nb_forgets_prev = self.nb_forgets_total
         if P.evolution_on and self.cycle > 0 and self.cycle % P.evolution_interval == 0:
             self.evolution_step()
+        if P.compat_export and self.cycle > 0 and self.cycle % P.sample_interval == 0:
+            self._reflex_track_stability()
+        if P.compat_export and self.cycle == P.end_cycle:
+            self._reflex_export_compat()
         if P.timeseries_export and self.cycle % P.sample_interval == 0:
             self._reflex_export_timeseries()
         if self.cycle == P.end_cycle:
@@ -1201,7 +1327,16 @@ class Model:
 
 TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", "QLEARN", "AQLEARN"]
 
+COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed", "payoff_preset",
+                 "payoff_T", "payoff_R", "payoff_P", "payoff_S", "evolution_on", "mutation_rate", "fermi_k",
+                 "evolution_interval", "dunbar_limit", "vision_radius", "end_cycle",
+                 "share_TFT", "share_ALLC", "share_ALLD", "share_FTFT", "share_TF2T", "share_GRIM", "share_WSLS",
+                 "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
+                 "distinct_partners", "exceeding_dunbar", "fixated", "stabilized", "stabilized_at",
+                 "nb_character_changes"]
+
 CSV_HEADERS = {
+    "compat_results.csv": COMPAT_HEADER,
     "character_timeseries.csv": ["variant_name", "seed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
                                 + ["d_share_window", "nb_character_changes"],
     "PD.csv": ["nb_game", "cycle", "p1", "p2", "p1_move", "p2_move", "p1.score", "p2.score"],
@@ -1258,6 +1393,27 @@ BATCH_EXPERIMENTS = {
         social_learning_boost_aqlearn=2.0, broken_windows_sensitivity=0.4, character_strength_qlearn=0.6)),
 }
 
+_S1 = dict(log_games=False, compat_core=True, compat_export=True, end_cycle=20000, vision_radius=30,
+           partner_window=10 ** 9)
+for _space, _wm in (("space", False), ("wellmixed", True)):
+    BATCH_EXPERIMENTS["S1_P12_" + _space] = dict(
+        repeat=15, until="end_cycle", seed=20261123,
+        among={"mutation_rate": [0.0, 0.01], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
+               "compat_N": [200, 500]},
+        params=dict(_S1, variant_name="S1_P12_" + _space, prediction="P1P2", compat_mix="equal",
+                    evolution_on=True, well_mixed=_wm))
+    BATCH_EXPERIMENTS["S1_P3_" + _space] = dict(
+        repeat=15, until="end_cycle", seed=20261123,
+        among={"dunbar_limit": [0, 5, 15, 50], "payoff_preset": ["PD_classic", "weak_PD", "snowdrift"],
+               "compat_N": [200, 500]},
+        params=dict(_S1, variant_name="S1_P3_" + _space, prediction="P3", compat_mix="tft_alld",
+                    evolution_on=False, well_mixed=_wm))
+
+
+def park_grid_for(n_agents):
+    """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
+    return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))
+
 
 class BatchRun:
     """Batch krok po kroku (żeby przeglądarka mogła pokazywać postęp)."""
@@ -1275,12 +1431,12 @@ class BatchRun:
         exp_seed = seed if seed is not None else spec.get("seed")
         seeder = random.Random(exp_seed) if exp_seed is not None else random.Random()
         seeds = [seeder.randrange(2 ** 31) for _ in range(self.repeat)]   # keep_seed: te same dla kombinacji
-        self.network = network or (PathNetwork.from_geojson(geojson) if geojson else PathNetwork.synthetic(
-            n=base.get("synthetic_grid", DEFAULTS["synthetic_grid"]),
-            spacing=base.get("synthetic_spacing", DEFAULTS["synthetic_spacing"])))
+        self.network = network or (PathNetwork.from_geojson(geojson) if geojson else None)
+        self._networks = {}
         self.jobs = [(dict(base, **c), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
+        self.compat_rows = []
         self.done = 0
         self.current = None
 
@@ -1294,7 +1450,14 @@ class BatchRun:
         while budget > 0 and self.done < len(self.jobs):
             if self.current is None:
                 params, s = self.jobs[self.done]
-                self.current = Model(Params(**params), seed=s, network=self.network)
+                net = self.network
+                if net is None:
+                    key = (params.get("synthetic_grid", DEFAULTS["synthetic_grid"]),
+                           params.get("synthetic_spacing", DEFAULTS["synthetic_spacing"]))
+                    if key not in self._networks:
+                        self._networks[key] = PathNetwork.synthetic(n=key[0], spacing=key[1])
+                    net = self._networks[key]
+                self.current = Model(Params(**params), seed=s, network=net)
             m = self.current
             limit = getattr(m.p, self.until_key)
             while budget > 0 and not (m.cycle > limit):   # until: cycle > ...
@@ -1305,6 +1468,7 @@ class BatchRun:
                 self.fingerprint_rows += m.fingerprint_rows
                 self.perf_rows += m.perf_rows
                 self.timeseries_rows += m.timeseries_rows
+                self.compat_rows += m.compat_rows
                 self.done += 1
                 self.current = None
         return self.done >= len(self.jobs)
@@ -1701,6 +1865,45 @@ def t_pending_action_sync_all_modules():
         if i % 10 == 0:
             m.evolution_step()
     assert a.character == "QLEARN"
+
+
+def t_compat_core_disables_noncore():
+    m = _test_model(nb_QLEARN=5, nb_AQLEARN=5, movement_sensitivity=2.0, env_influence_qlearn=0.5,
+                    social_sensitivity_aqlearn=1.5, social_learning_boost_aqlearn=2.0,
+                    broken_windows_sensitivity=0.4, character_strength_qlearn=0.6, unlimited_games=False,
+                    log_games=False)
+    assert len(m.core_violations()) == 7
+    m.p.compat_N, m.p.compat_mix = 200, "equal"
+    m.apply_compat_core()
+    assert m.p.nb_QLEARN == 0 and m.p.broken_windows_sensitivity == 0.0
+    assert sum(getattr(m.p, "nb_" + c) for c in CLASSIC) == 200 and m.p.classic_start_cooperate
+    # pełny model z compat_core: nawet przy "zabrudzonych" parametrach powstaje czysty rdzeń
+    full = Model(Params(compat_core=True, compat_N=70, nb_QLEARN=5, movement_sensitivity=2.0,
+                        broken_windows_sensitivity=0.4, character_strength_qlearn=0.6, log_games=False), seed=1)
+    assert full.core_violations() == []
+    assert len(full.players) == 70 and all(p.character in CLASSIC for p in full.players)
+    m.p.compat_mix = "tft_alld"
+    m.apply_compat_core()
+    assert m.p.nb_ALLD == 40 and m.p.nb_TFT == 160
+    assert sum(getattr(m.p, "nb_" + c) for c in ("ALLC", "FTFT", "TF2T", "GRIM", "WSLS")) == 0
+
+
+def t_payoff_presets():
+    for pr in PAYOFF_PRESETS:
+        m = _test_model(payoff_preset=pr, unlimited_games=True)
+        assert m.payoffs_valid()
+
+
+def t_stability_detection():
+    # agenci rozproszeni w ogromnym świecie, bez gier: wektor się nie zmienia -> stabilizacja
+    m = Model(Params(compat_core=True, compat_N=14, compat_export=True, vision_radius=0, real_env=False,
+                     world_size=100000, warmup=100,
+                     stab_window=200, stab_k=3, end_cycle=2000, log_games=False), seed=3)
+    m.run(2001)
+    assert m.nb_game == 0
+    assert m.stab_count >= 3 and m.stabilized_at == 100 + 200 * 4   # 4. okno po warmup = 3. porównanie bez zmian
+    row = m.compat_rows[0]
+    assert len(row) == len(COMPAT_HEADER) and row[COMPAT_HEADER.index("stabilized")] is True
 
 
 def t_smoke_full_run():
