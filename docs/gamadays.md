@@ -80,3 +80,12 @@ wyraźnego progu. Stąd decyzja 12.
   10 000 cykli, 2 seedy): bez mutacji fiksacja (raz ALLD, raz GRIM + WSLS); z `mutation_rate` 0,01
   ALLD ok. 0,97–0,98. W `well_mixed` para spotyka się ok. 2 razy na okno ewolucji, więc gra jest
   prawie jednorazowa i przewaga ALLD jest oczekiwana. To wstępny sygnał dla P1, nie wynik etapu 1.
+
+## Decyzje po przeglądzie kodu portu (U1–U10)
+
+| Nr | Decyzja |
+|---|---|
+| 13 | `network_cleanup = true` we wszystkich eksperymentach zgodności (S1, S2, PM): bez pętli, agenci tylko na największej składowej. Domyślnie w modelu `false` (zgodność z JASSS). Dla N = 200 (sieć syntetyczna z jedną składową) wyniki identyczne. |
+| 14 | Liczniki okien stabilizacji (`stab_count`, `stabilized_at`) zostają w kodzie, choć nie trafiają do CSV. |
+| 15 | Nazwa wariantu `fragmented` zostaje; wariant redukuje redundancję (krawędzie w cyklach), liczba usuniętych krawędzi w `net_edges_removed`. |
+| 16 | `feedback_value` pozostaje niezależne od macierzy wypłat; przy snowdrifcie z ruchem/uczeniem środowiskowym model wypisuje ostrzeżenie. |

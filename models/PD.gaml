@@ -1766,6 +1766,7 @@ experiment S1_P12_space type: batch repeat: 15 keep_seed: true until: cycle > en
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1785,6 +1786,7 @@ experiment S1_P12_wellmixed type: batch repeat: 15 keep_seed: true until: cycle 
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1805,6 +1807,7 @@ experiment S1_P1_mobility type: batch repeat: 15 keep_seed: true until: cycle > 
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1825,6 +1828,7 @@ experiment S1_P3_space type: batch repeat: 15 keep_seed: true until: cycle > end
 	parameter "prediction" var: prediction init: "P3";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
@@ -1844,6 +1848,7 @@ experiment S1_P3_wellmixed type: batch repeat: 15 keep_seed: true until: cycle >
 	parameter "prediction" var: prediction init: "P3";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
@@ -1866,6 +1871,7 @@ experiment S2_pairs type: batch repeat: 15 keep_seed: true until: cycle > end_cy
 	parameter "prediction" var: prediction init: "S2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1888,6 +1894,7 @@ experiment PM2_P12_space type: batch repeat: 10 keep_seed: true until: cycle > e
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1909,6 +1916,7 @@ experiment PM2_P12_wellmixed type: batch repeat: 10 keep_seed: true until: cycle
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1929,6 +1937,7 @@ experiment PM2_P3_space type: batch repeat: 10 keep_seed: true until: cycle > en
 	parameter "prediction" var: prediction init: "P3";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
@@ -1950,6 +1959,7 @@ experiment PM2_P3_wellmixed type: batch repeat: 10 keep_seed: true until: cycle 
 	parameter "prediction" var: prediction init: "P3";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
@@ -1971,6 +1981,7 @@ experiment PM3_P1_network type: batch repeat: 10 keep_seed: true until: cycle > 
 	parameter "prediction" var: prediction init: "P1P2";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";
@@ -1992,6 +2003,7 @@ experiment PM3_P3_network type: batch repeat: 10 keep_seed: true until: cycle > 
 	parameter "prediction" var: prediction init: "P3";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "timeseries_export" var: timeseries_export init: true;
 	parameter "compat_mix" var: compat_mix init: "tft_alld";
@@ -2014,6 +2026,7 @@ experiment PM4_heatmap type: batch repeat: 1 keep_seed: true until: cycle > end_
 	parameter "prediction" var: prediction init: "heatmap";
 	parameter "log_games" var: log_games init: false;
 	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
 	parameter "compat_export" var: compat_export init: true;
 	parameter "encounter_export" var: encounter_export init: true;
 	parameter "compat_mix" var: compat_mix init: "equal";

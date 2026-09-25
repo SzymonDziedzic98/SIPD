@@ -1724,7 +1724,7 @@ BATCH_EXPERIMENTS = {
 }
 
 _S1 = dict(log_games=False, compat_core=True, compat_export=True, timeseries_export=True, end_cycle=20000,
-           vision_radius=30,
+           vision_radius=30, network_cleanup=True,
            partner_window=10 ** 9)
 for _space, _wm in (("space", False), ("wellmixed", True)):
     BATCH_EXPERIMENTS["S1_P12_" + _space] = dict(
