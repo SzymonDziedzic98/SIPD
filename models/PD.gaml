@@ -206,6 +206,7 @@ global {
 	float net_density <- 0.0;
 	float net_betw_max <- 0.0;              // betweenness węzłów, znormalizowana przez (n-1)(n-2)/2
 	float net_betw_mean <- 0.0;
+	int net_edges_removed <- 0;             // U5: faktycznie usunięte krawędzie (fragmented)
 
 	// buduje sieć z pliku i stosuje wariant; ten sam seed -> ta sama modyfikacja
 	action setup_network() {
@@ -230,7 +231,8 @@ global {
 	}
 
 	// usuwa krawędzie w losowej kolejności, tylko takie, które nie zwiększają liczby składowych
-	// i nie usuwają węzła (krawędzie w cyklach)
+	// i nie usuwają węzła (krawędzie w cyklach). U5: redukuje redundancję (mniej obejść), nie rozcina sieci;
+	// w sieci bliskiej drzewu edge_removal_fraction może nie zostać osiągnięte -> net_edges_removed
 	action fragment_network() {
 		int target <- round(length(path_segment) * edge_removal_fraction);
 		int n_vertices <- length(path_network.vertices);
@@ -245,6 +247,7 @@ global {
 				removed <+ e;
 			}
 		}
+		net_edges_removed <- length(removed);
 		ask removed { do die; }
 	}
 
@@ -505,7 +508,8 @@ global {
 			well_mixed ? "n/a" : string(net_mean_degree), well_mixed ? "n/a" : string(net_avg_path),
 			well_mixed ? "n/a" : string(net_density), well_mixed ? "n/a" : string(net_betw_max),
 			well_mixed ? "n/a" : string(net_betw_mean),
-			enc_share_remembered, enc_share_ever, enc_distinct]
+			enc_share_remembered, enc_share_ever, enc_distinct,
+			well_mixed ? "n/a" : string(net_edges_removed)]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 

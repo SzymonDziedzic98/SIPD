@@ -238,6 +238,7 @@ class PathNetwork:
         self.source = source
         self.polylines = polylines            # do rysowania (path_segment / park_boundary)
         self.drop_loops = drop_loops
+        self.edges_removed = 0                # U5: faktycznie usunięte krawędzie (wariant fragmented)
         self.vertices = []
         self.adj = {}                         # v -> {u: polilinia v..u (najkrótsza)}
         index = {}
@@ -290,11 +291,18 @@ class PathNetwork:
         return self._components(self.adj)
 
     def variant(self, kind, rng, fraction=0.2, count=20, max_length=100.0):
-        """Nowa sieć: "fragmented" (usuwa krawędzie w cyklach, bez rozcinania) albo "connected" (skróty)."""
+        """Nowa sieć: "fragmented" albo "connected" (skróty).
+
+        U5: "fragmented" usuwa tylko krawędzie leżące w cyklach (usunięcie nie zwiększa liczby składowych
+        ani nie odcina węzła), zgodnie z CLAUDE.md - redukuje redundancję (mniej obejść, dłuższe ścieżki),
+        a nie rozcina sieci. W sieci bliskiej drzewu docelowe edge_removal_fraction może nie zostać
+        osiągnięte; faktyczna liczba usuniętych krawędzi to atrybut edges_removed (kolumna
+        net_edges_removed)."""
         if kind == "baseline":
             return self
         adj = {v: dict(nb) for v, nb in self.adj.items()}
         comps0 = self._components(adj)
+        removed = 0
         if kind == "fragmented":
             edges = self._edges(adj)
             rng.shuffle(edges)
@@ -320,8 +328,10 @@ class PathNetwork:
         else:
             raise ModelError("Nieznany network_variant: %s" % kind)
         polylines = [adj[a][b] for a, b in self._edges(adj)]
-        return PathNetwork(polylines, self.width, self.height, self.source + "/" + kind,
-                           drop_loops=getattr(self, "drop_loops", False))
+        net = PathNetwork(polylines, self.width, self.height, self.source + "/" + kind,
+                          drop_loops=getattr(self, "drop_loops", False))
+        net.edges_removed = removed if kind == "fragmented" else 0
+        return net
 
     def stats(self, path_sources=100):
         """Węzły, krawędzie, średni stopień, średnia najkrótsza ścieżka (kroki, z pierwszych węzłów),
@@ -1410,7 +1420,8 @@ class Model:
             self.nb_character_changes]
             + ([P.network_variant] + [self.net_stats[k] for k in NET_STAT_KEYS]
                if (self.net_stats and not P.well_mixed) else ["n/a"] * (1 + len(NET_STAT_KEYS)))
-            + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct])
+            + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct]
+            + ["n/a" if (P.well_mixed or not P.real_env) else self.network.edges_removed])
 
     # --- zdarzenie po grze i metryka stabilności spotkań ----------------------
     def on_game_played(self, g):
@@ -1630,7 +1641,7 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
                  "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "alld_trend_10k",
                  "nb_character_changes", "network_variant"] + NET_STAT_KEYS + [
-                 "enc_share_remembered", "enc_share_ever", "enc_distinct"]
+                 "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"]
 
 CSV_HEADERS = {
     "encounter_cells.csv": ["variant_name", "seed", "network_variant", "col", "row", "total_games",
@@ -2283,7 +2294,8 @@ def t_network_variants():
     base = PathNetwork.synthetic(n=12)
     c0, n0, e0 = base.components(), len([v for v in base.adj if base.adj[v]]), len(PathNetwork._edges(base.adj))
     frag = base.variant("fragmented", random.Random(7), fraction=0.2)
-    assert frag.components() <= c0
+    assert frag.components() == c0
+    assert frag.edges_removed == e0 - len(PathNetwork._edges(frag.adj)) > 0
     assert len([v for v in frag.adj if frag.adj[v]]) == n0          # żaden węzeł nie znika
     assert len(PathNetwork._edges(frag.adj)) < e0
     conn = base.variant("connected", random.Random(7), count=10, max_length=100.0)
@@ -2293,6 +2305,9 @@ def t_network_variants():
     again = base.variant("fragmented", random.Random(7), fraction=0.2)
     assert PathNetwork._edges(again.adj) == PathNetwork._edges(frag.adj)
     assert base.variant("baseline", random.Random(1)) is base
+    # sieć-drzewo (ścieżka): nie ma czego usunąć bez rozcięcia -> 0 usuniętych mimo fraction 0.5
+    tree = PathNetwork([[(i, 0.0), (i + 1.0, 0.0)] for i in range(10)], 10, 1, "t")
+    assert tree.variant("fragmented", random.Random(1), fraction=0.5).edges_removed == 0
 
 
 def t_network_stats_known_graph():
