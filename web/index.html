@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SIPD w przeglądarce</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --ground: #f2f4ee;
+  --panel: #fbfcf8;
+  --ink: #1c2520;
+  --muted: #5d6a61;
+  --line: #d5dbd0;
+  --park: #3f6b4a;
+  --path: #9a5b34;
+  --accent: #b5731a;
+  --good: #2f7d46;
+  --bad: #b3372b;
+  --focus: #1f6fb2;
+  --cell-neutral: 242, 244, 238;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-label: "IBM Plex Sans Condensed", "Arial Narrow", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #121714; --panel: #19201b; --ink: #e2e8e0; --muted: #98a59b; --line: #2d3830;
+    --park: #7fb08a; --path: #c98a5f; --accent: #e0a24a; --good: #6cc38a; --bad: #ef7a6c; --focus: #6fb1ea;
+    --cell-neutral: 25, 32, 27;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #121714; --panel: #19201b; --ink: #e2e8e0; --muted: #98a59b; --line: #2d3830;
+  --park: #7fb08a; --path: #c98a5f; --accent: #e0a24a; --good: #6cc38a; --bad: #ef7a6c; --focus: #6fb1ea;
+  --cell-neutral: 25, 32, 27;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--ground); color: var(--ink); font: 14px/1.5 var(--font-body);
+  padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
+}
+h1, h2, h3 { font-family: var(--font-label); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: 22px; letter-spacing: .01em; }
+h2 { font-size: 16px; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+header.top {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px;
+  padding-block: 16px 12px; border-bottom: 1px solid var(--line);
+}
+header.top p { margin: 0; color: var(--muted); max-width: 70ch; }
+.status { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.status b { color: var(--ink); font-weight: 500; }
+
+nav.tabs { display: flex; gap: 4px; padding-block: 10px; flex-wrap: wrap; }
+nav.tabs button {
+  border: 1px solid var(--line); background: transparent; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  font-family: var(--font-label); font-weight: 500;
+}
+nav.tabs button[aria-selected="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; padding-block: 4px 32px; }
+@media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+aside.params { display: flex; flex-direction: column; gap: 8px; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.btn {
+  border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; border-radius: 6px; cursor: pointer;
+}
+.btn.primary { background: var(--park); border-color: var(--park); color: var(--ground); font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; }
+details.cat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+details.cat > summary {
+  cursor: pointer; padding: 8px 12px; font-family: var(--font-label); font-weight: 600; font-size: 13px;
+  letter-spacing: .03em; list-style-position: inside;
+}
+.fields { display: grid; gap: 6px; padding: 4px 12px 12px; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 8px; align-items: center; }
+.field label { font-size: 12.5px; color: var(--muted); }
+.field input[type="number"], .field input[type="text"], .field select {
+  width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--ground);
+  font-family: var(--font-mono); font-size: 12.5px;
+}
+.field input[type="checkbox"] { justify-self: start; width: 16px; height: 16px; accent-color: var(--park); }
+.controls .field { grid-template-columns: auto minmax(110px, 190px); }
+.field.stack { grid-template-columns: minmax(0, 1fr); }
+.field input[type="file"] { max-width: 100%; font-size: 12px; }
+.field.restart label::after { content: " ↻"; color: var(--accent); }
+.hint { font-size: 12px; color: var(--muted); margin: 0; }
+
+main { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.displays { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1100px) { .displays { grid-template-columns: minmax(0, 1fr); } }
+figure.display { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+figure.display figcaption { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+figure.display canvas.map { width: 100%; aspect-ratio: 1 / 1; display: block; border-radius: 4px; cursor: crosshair; }
+.chart-box { position: relative; height: 240px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.legend span::before {
+  content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px;
+  background: var(--c); vertical-align: 0;
+}
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.stat dt { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-family: var(--font-label); }
+.stat dd { margin: 0; font-family: var(--font-mono); font-size: 15px; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-family: var(--font-label); font-weight: 600; color: var(--muted); }
+td.num, th.num { text-align: right; }
+.ok { color: var(--good); font-weight: 600; }
+.fail { color: var(--bad); font-weight: 600; }
+progress { width: 100%; height: 10px; accent-color: var(--park); }
+.msg { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); }
+.msg.error { border-color: var(--bad); color: var(--bad); }
+.msg.warn { border-color: var(--accent); }
+.loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ground); z-index: 10; }
+.loading .box { display: grid; gap: 10px; max-width: 420px; padding: 16px; }
+ul.plain { margin: 0; padding-left: 18px; }
+code { font-family: var(--font-mono); font-size: 12.5px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+</head>
+<body>
+
+<div class="loading" id="loading">
+  <div class="box">
+    <h2>Ładowanie Pythona (Pyodide)…</h2>
+    <progress id="loadBar"></progress>
+    <p class="hint" id="loadMsg">Pierwsze uruchomienie pobiera ok. 10 MB, potem przeglądarka trzyma to w pamięci podręcznej.</p>
+    <div id="loadPick" hidden>
+      <p class="hint">Nie udało się wczytać <code>sipd.py</code> obok strony (strona otwarta jako plik?). Wskaż plik ręcznie albo uruchom <code>python -m http.server</code> w katalogu <code>web/</code>.</p>
+      <input type="file" id="pySrcFile" accept=".py">
+    </div>
+  </div>
+</div>
+
+<header class="top">
+  <h1>SIPD – przestrzenny dylemat więźnia</h1>
+  <p>Port modelu <code>PD.gaml</code> do Pythona, uruchamiany w przeglądarce. Parametry z oznaczeniem ↻ działają po ponownej inicjalizacji.</p>
+  <div class="status" id="status">cykl <b id="stCycle">–</b> · gier <b id="stGames">–</b> · sieć <b id="stNet">–</b></div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="sim" id="tab-sim">Symulacja</button>
+  <button role="tab" aria-selected="false" data-tab="batch" id="tab-batch">Eksperymenty batch</button>
+  <button role="tab" aria-selected="false" data-tab="tests" id="tab-tests">Testy</button>
+  <button role="tab" aria-selected="false" data-tab="about" id="tab-about">O porcie</button>
+</nav>
+
+<!-- SYMULACJA -->
+<section data-panel="sim" class="layout">
+  <aside class="params">
+    <div class="controls">
+      <button class="btn primary" id="btnInit">Inicjalizuj</button>
+      <button class="btn" id="btnRun" disabled>Start</button>
+      <button class="btn" id="btnStep" disabled>Krok</button>
+    </div>
+    <div class="field"><label for="speed">Cykli na klatkę</label>
+      <input type="number" id="speed" min="1" max="500" value="5"></div>
+    <div class="field"><label for="seed">Seed (puste = losowy)</label>
+      <input type="text" id="seed" placeholder="losowy"></div>
+    <div class="field"><label for="preset">Wczytaj ustawienia z</label>
+      <select id="preset"><option value="">—</option></select></div>
+    <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
+      <input type="file" id="geoFile" accept=".geojson,.json"></div>
+    <p class="hint" id="geoInfo">Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
+    <div id="paramForm"></div>
+  </aside>
+
+  <main>
+    <div id="messages"></div>
+    <dl class="stats" id="stats"></dl>
+    <div class="displays">
+      <figure class="display">
+        <figcaption><h3>abc – mapa i relacje</h3>
+          <select id="layer" aria-label="Warstwa komórek">
+            <option value="summary">komórki: średni feedback</option>
+            <option value="disorder">komórki: disorder</option>
+          </select>
+        </figcaption>
+        <canvas class="map" id="mapMain" width="720" height="720"></canvas>
+      </figure>
+      <figure class="display">
+        <figcaption><h3 id="memTitle">agent_memory</h3><span class="hint">kliknij agenta na mapie, żeby go wybrać</span></figcaption>
+        <canvas class="map" id="mapMem" width="720" height="720"></canvas>
+      </figure>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="displays">
+      <figure class="display">
+        <figcaption><h3>Score (wynik na 1000 gier)</h3></figcaption>
+        <div class="chart-box"><canvas id="chartScore"></canvas></div>
+      </figure>
+      <figure class="display">
+        <figcaption><h3>Pamięć partnerów (Dunbar)</h3></figcaption>
+        <div class="chart-box"><canvas id="chartDunbar"></canvas></div>
+      </figure>
+    </div>
+    <div class="panel">
+      <h2>Pliki wynikowe</h2>
+      <p class="hint">Odpowiedniki plików z <code>results/</code> dla bieżącego przebiegu. <code>ablation_results.csv</code> powstaje w cyklu <code>end_cycle</code>.</p>
+      <div class="controls" id="simDownloads"></div>
+    </div>
+  </main>
+</section>
+
+<!-- BATCH -->
+<section data-panel="batch" hidden>
+  <div class="panel">
+    <h2>Eksperymenty batch z PD.gaml</h2>
+    <p class="hint">Oryginalne ustawienia to 30 powtórzeń × 50 000 cykli, co w przeglądarce zajmie bardzo długo. Domyślnie skracam je poniżej; wpisz pełne wartości, jeśli chcesz odtworzyć eksperyment wiernie.</p>
+    <div class="controls">
+      <div class="field"><label for="bExp">Eksperyment</label><select id="bExp"></select></div>
+      <div class="field"><label for="bRepeat">Powtórzenia</label><input type="number" id="bRepeat" min="1" value="3"></div>
+      <div class="field"><label for="bEnd">end_cycle</label><input type="number" id="bEnd" min="1" value="2000"></div>
+      <div class="field"><label for="bSeed">Seed eksperymentu</label><input type="text" id="bSeed" placeholder="z eksperymentu"></div>
+      <button class="btn primary" id="bRun">Uruchom</button>
+      <button class="btn" id="bStop" disabled>Zatrzymaj</button>
+    </div>
+    <p class="hint" id="bSpec"></p>
+    <progress id="bProg" value="0" max="1"></progress>
+    <p class="hint mono" id="bProgTxt">—</p>
+    <div class="table-wrap" id="bSummary"></div>
+    <div class="table-wrap" id="bTable"></div>
+    <div class="controls" id="bDownloads"></div>
+  </div>
+</section>
+
+<!-- TESTY -->
+<section data-panel="tests" hidden>
+  <div class="panel">
+    <h2>Testy (odpowiedniki <code>experiment … type: test</code>)</h2>
+    <div class="controls"><button class="btn primary" id="tRun">Uruchom testy</button><span class="hint" id="tSummary"></span></div>
+    <div class="table-wrap" id="tTable"></div>
+  </div>
+</section>
+
+<!-- O PORCIE -->
+<section data-panel="about" hidden>
+  <div class="panel" style="max-width: 75ch">
+    <h2>Co odwzorowuje ten port</h2>
+    <p>Plik <code>sipd.py</code> zawiera cały model z <code>models/PD.gaml</code>: sieć ścieżek, siatkę komórek z polem disorder, 9 charakterów, Q-learning per przeciwnik ze stanami RISKY/SAFE, pamięć społeczną i środowiskową, efekt rozbitej szyby, kotwicę charakteru, ograniczenie gier (height), limit Dunbara, typ gry, klasyczny start od C, metryki, eksporty CSV, eksperymenty batch i testy.</p>
+    <h3>Różnice względem GAMA</h3>
+    <ul class="plain">
+      <li>Inny generator liczb losowych: wyniki zgadzają się statystycznie, nie liczba w liczbę. W obrębie tej wersji ten sam seed daje te same wyniki.</li>
+      <li>GeoJSON w stopniach jest rzutowany lokalnie na metry (GAMA używa UTM); różnica w skali parku jest pomijalna.</li>
+      <li>Ruch po sieci idzie krawędzią do sąsiedniego wierzchołka; <code>wander</code> w sztucznym świecie przy krawędzi losuje nowy kierunek.</li>
+      <li>Bez pliku <code>drogi.geojson</code> używana jest syntetyczna sieć parkowa 540 × 540 m.</li>
+    </ul>
+    <h3>Uruchamianie poza przeglądarką</h3>
+    <p><code>python sipd.py --test</code>, <code>python sipd.py --experiment A_baseline --repeat 2 --end-cycle 2000 --geojson drogi.geojson</code>. Stronę lokalnie: <code>python -m http.server</code> w katalogu <code>web/</code>, potem <code>http://localhost:8000</code>.</p>
+  </div>
+</section>
+
+<script>
+"use strict";
+const COLORS = {
+  TFT: "#2f6fb2", QLEARN: "#8a4fbf", AQLEARN: "#c0508a", ALLC: "#2f9d63", ALLD: "#1c2520",
+  FTFT: "#3aa3b5", TF2T: "#6d7fd6", GRIM: "#b3372b", WSLS: "#c98a1a",
+};
+const RESTART_KEYS = new Set(["real_env", "world_size", "grid_cols", "grid_rows", "nb_QLEARN", "nb_AQLEARN",
+  "nb_TFT", "nb_ALLC", "nb_ALLD", "nb_FTFT", "nb_TF2T", "nb_GRIM", "nb_WSLS", "game_type", "payoff_T",
+  "payoff_R", "payoff_P", "payoff_S", "movement_sensitivity", "env_influence_qlearn",
+  "social_sensitivity_aqlearn", "social_learning_boost_aqlearn", "base_character_qlearn",
+  "character_strength_qlearn"]);
+
+let py = null, DEFAULTS = {}, GUI = [], EXPS = {};
+let running = false, snap = null, net = null, hasModel = false;
+let chartScore = null, chartDunbar = null;
+let batchStop = false;
+
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function showMsg(text, kind = "") {
+  const box = $("messages");
+  const div = document.createElement("div");
+  div.className = "msg " + kind;
+  div.textContent = text;
+  box.replaceChildren(div);
+}
+
+// ---------- ładowanie Pyodide + sipd.py ----------
+async function boot() {
+  try {
+    $("loadMsg").textContent = "Pobieranie interpretera Pythona…";
+    py = await loadPyodide();
+  } catch (e) {
+    $("loadMsg").textContent = "Nie udało się pobrać Pyodide: " + e.message + ". Sprawdź połączenie z internetem.";
+    return;
+  }
+  let src = null;
+  try {
+    const r = await fetch("sipd.py", { cache: "no-cache" });
+    if (r.ok) src = await r.text();
+  } catch (e) { /* file:// – wybór ręczny poniżej */ }
+  if (!src) {
+    $("loadPick").hidden = false;
+    $("loadBar").hidden = true;
+    src = await new Promise((resolve) => {
+      $("pySrcFile").addEventListener("change", async (ev) => resolve(await ev.target.files[0].text()), { once: true });
+    });
+  }
+  py.FS.writeFile("sipd.py", src);
+  py.runPython(`
+import sys, json
+sys.path.insert(0, ".")
+import sipd
+M = None
+B = None
+GEO = None
+def _new_model(params_json, seed):
+    global M
+    M = sipd.Model(sipd.Params(**json.loads(params_json)), seed=seed, geojson=GEO)
+    return json.dumps({"warnings": M.warnings, "network": json.loads(M.network_json())})
+def _set(key, value_json):
+    if M is not None:
+        setattr(M.p, key, json.loads(value_json))
+def _step(n):
+    M.run(n)
+    return M.snapshot()
+def _csv(name):
+    src = {"PD.csv": M.game_log, "ablation_results.csv": M.ablation_rows,
+           "regression_fingerprint.csv": M.fingerprint_rows, "perf.csv": M.perf_rows}[name]
+    return sipd.to_csv(name, src)
+def _batch_csv(name):
+    src = {"ablation_results.csv": B.ablation_rows, "regression_fingerprint.csv": B.fingerprint_rows}[name]
+    return sipd.to_csv(name, src)
+def _meta():
+    exps = {k: {"repeat": v["repeat"], "until": v["until"], "seed": v.get("seed"),
+                "among": v.get("among", {}), "params": v["params"]} for k, v in sipd.BATCH_EXPERIMENTS.items()}
+    return json.dumps({"defaults": sipd.DEFAULTS, "gui": sipd.GUI_PARAMETERS, "exps": exps,
+                       "game_types": sipd.GAME_TYPES, "characters": sipd.CHARACTERS})
+`);
+  const meta = JSON.parse(py.runPython("_meta()"));
+  DEFAULTS = meta.defaults; GUI = meta.gui; EXPS = meta.exps;
+  buildForm(meta);
+  buildBatch();
+  buildLegend(meta.characters);
+  loadDemoPreset();
+  $("loading").hidden = true;
+  initModel();
+}
+
+// ---------- formularz parametrów ----------
+function inputFor(key) {
+  const v = DEFAULTS[key];
+  let el;
+  if (key === "game_type") {
+    el = document.createElement("select");
+    ["PD", "weak_PD", "snowdrift"].forEach((g) => el.add(new Option(g, g)));
+  } else if (key === "base_character_qlearn") {
+    el = document.createElement("select");
+    ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"].forEach((g) => el.add(new Option(g, g)));
+  } else if (typeof v === "boolean") {
+    el = document.createElement("input"); el.type = "checkbox";
+  } else if (typeof v === "number") {
+    el = document.createElement("input"); el.type = "number";
+    el.step = Number.isInteger(v) && !key.startsWith("payoff") ? "1" : "any";
+    el.dataset.int = (Number.isInteger(v) && !key.startsWith("payoff") && !/sensitivity|influence|boost|decay|bump|strength|rate|threshold/.test(key)) ? "1" : "";
+  } else {
+    el = document.createElement("input"); el.type = "text";
+  }
+  el.id = "p_" + key;
+  el.dataset.key = key;
+  setInput(el, v);
+  el.addEventListener("change", () => onParamChange(key));
+  return el;
+}
+function setInput(el, v) { if (el.type === "checkbox") el.checked = !!v; else el.value = v; }
+function readInput(key) {
+  const el = $("p_" + key), def = DEFAULTS[key];
+  if (el.type === "checkbox") return el.checked;
+  if (typeof def === "number") {
+    const n = el.dataset.int ? parseInt(el.value, 10) : parseFloat(el.value);
+    return Number.isFinite(n) ? n : def;
+  }
+  return el.value;
+}
+function readParams() {
+  const p = {};
+  Object.keys(DEFAULTS).forEach((k) => { p[k] = readInput(k); });
+  return p;
+}
+function buildForm() {
+  const form = $("paramForm");
+  const shown = new Set();
+  const cats = GUI.map(([name, items]) => [name, items]);
+  const rest = Object.keys(DEFAULTS).filter((k) => !GUI.some(([, it]) => it.some(([kk]) => kk === k)));
+  cats.push(["Pozostałe (poza GUI w GAMA)", rest.map((k) => [k, k])]);
+  cats.forEach(([name, items], i) => {
+    const d = document.createElement("details");
+    d.className = "cat"; d.open = i < 2;
+    const s = document.createElement("summary"); s.textContent = name; d.append(s);
+    const f = document.createElement("div"); f.className = "fields";
+    items.forEach(([key, label]) => {
+      if (shown.has(key)) return; shown.add(key);
+      const row = document.createElement("div");
+      row.className = "field" + (RESTART_KEYS.has(key) ? " restart" : "");
+      const lab = document.createElement("label"); lab.htmlFor = "p_" + key; lab.textContent = label;
+      row.append(lab, inputFor(key));
+      f.append(row);
+    });
+    d.append(f); form.append(d);
+  });
+  const sel = $("preset");
+  Object.keys(EXPS).forEach((k) => sel.add(new Option(k, k)));
+  sel.addEventListener("change", () => { if (sel.value) applyPreset(sel.value); });
+}
+function applyPreset(name) {
+  const e = EXPS[name];
+  Object.keys(DEFAULTS).forEach((k) => setInput($("p_" + k), DEFAULTS[k]));
+  Object.entries(e.params).forEach(([k, v]) => setInput($("p_" + k), v));
+  Object.entries(e.among || {}).forEach(([k, vals]) => setInput($("p_" + k), vals[0]));
+  setInput($("p_log_games"), true);
+  if (e.until === "end_cycle") setInput($("p_end_cycle"), DEFAULTS.end_cycle);
+  showMsg("Wczytano ustawienia " + name + ". Kliknij Inicjalizuj.", "warn");
+}
+function loadDemoPreset() {
+  // stan startowy strony: mieszanka wszystkich charakterów, żeby od razu było co oglądać
+  const demo = { nb_QLEARN: 4, nb_AQLEARN: 4, nb_TFT: 3, nb_ALLC: 2, nb_ALLD: 2, nb_FTFT: 2, nb_TF2T: 2,
+    nb_GRIM: 2, nb_WSLS: 3, vision_radius: 30, social_sensitivity_aqlearn: 1.5,
+    social_learning_boost_aqlearn: 2.0, env_influence_qlearn: 0.5, log_games: true };
+  Object.entries(demo).forEach(([k, v]) => setInput($("p_" + k), v));
+}
+function onParamChange(key) {
+  if (!hasModel) return;
+  if (RESTART_KEYS.has(key)) { showMsg("Zmiana „" + key + "” zadziała po kliknięciu Inicjalizuj.", "warn"); return; }
+  py.globals.get("_set")(key, JSON.stringify(readInput(key)));
+  if (snap) redraw();
+}
+
+// ---------- model ----------
+function initModel() {
+  stop();
+  const seedTxt = $("seed").value.trim();
+  const seed = seedTxt === "" ? null : parseInt(seedTxt, 10);
+  try {
+    const res = JSON.parse(py.globals.get("_new_model")(JSON.stringify(readParams()), seed));
+    net = res.network;
+    hasModel = true;
+    $("stNet").textContent = net.source === "geojson" ? "GeoJSON" : (readInput("real_env") ? "syntetyczna" : "sztuczny świat");
+    if (res.warnings.length) showMsg(res.warnings.join(" "), "warn"); else $("messages").replaceChildren();
+  } catch (e) {
+    hasModel = false;
+    showMsg(pyError(e), "error");
+    ["btnRun", "btnStep"].forEach((id) => { $(id).disabled = true; });
+    return;
+  }
+  ["btnRun", "btnStep"].forEach((id) => { $(id).disabled = false; });
+  resetCharts();
+  snap = JSON.parse(py.runPython("M.snapshot()"));
+  redraw();
+  updateCharts(true);
+}
+function pyError(e) {
+  const m = String(e.message || e);
+  const line = m.trim().split("\n").filter(Boolean).pop();
+  return line || m;
+}
+function stepOnce(n) {
+  try {
+    snap = JSON.parse(py.globals.get("_step")(n));
+  } catch (e) {
+    stop(); showMsg(pyError(e), "error"); return false;
+  }
+  return true;
+}
+let lastChartCycle = -1;
+function loop() {
+  if (!running) return;
+  const n = Math.max(1, parseInt($("speed").value, 10) || 1);
+  if (stepOnce(n)) {
+    redraw();
+    if (snap.cycle - lastChartCycle >= 10) updateCharts();
+    requestAnimationFrame(loop);
+  }
+}
+function start() { if (!hasModel) return; running = true; $("btnRun").textContent = "Pauza"; requestAnimationFrame(loop); }
+function stop() { running = false; $("btnRun").textContent = "Start"; }
+
+// ---------- rysowanie ----------
+function fit(canvas) {
+  const w = net.w || 1, h = net.h || 1;
+  const pad = 12, s = Math.min((canvas.width - 2 * pad) / w, (canvas.height - 2 * pad) / h);
+  const ox = (canvas.width - s * w) / 2, oy = (canvas.height - s * h) / 2;
+  return { s, X: (x) => ox + x * s, Y: (y) => oy + y * s };
+}
+function mix(rgbA, rgbB, t) { return rgbA.map((a, i) => Math.round(a + (rgbB[i] - a) * t)); }
+function hexRgb(h) { const n = parseInt(h.replace("#", ""), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function drawMap(canvas, mode) {
+  const ctx = canvas.getContext("2d");
+  const { s, X, Y } = fit(canvas);
+  const neutral = css("--cell-neutral").split(",").map(Number);
+  const good = hexRgb(css("--good")), bad = hexRgb(css("--bad")), accent = hexRgb(css("--accent"));
+  ctx.fillStyle = css("--ground"); ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "rgb(" + neutral + ")"; ctx.fillRect(X(0), Y(0), net.w * s, net.h * s);
+  const cw = net.w / snap.cols, ch = net.h / snap.rows;
+  const cells = mode === "personal" ? snap.personal : (mode === "disorder" ? snap.disorder : snap.summary);
+  for (const [idx, v] of Object.entries(cells)) {
+    const i = +idx, c = i % snap.cols, r = Math.floor(i / snap.cols);
+    let col;
+    if (mode === "disorder") col = mix(neutral, accent, Math.min(1, v));
+    else col = v >= 0 ? mix(neutral, good, Math.min(1, v)) : mix(neutral, bad, Math.min(1, -v));
+    ctx.fillStyle = "rgb(" + col + ")";
+    ctx.fillRect(X(c * cw), Y(r * ch), cw * s + 0.5, ch * s + 0.5);
+  }
+  // park_boundary (transparency 0.3) + path_segment
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const [color, width, alpha] of [[css("--park"), 6, 0.3], [css("--path"), 2, 1]]) {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    for (const ln of net.lines) {
+      ln.forEach(([x, y], k) => (k ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  if (!net.lines.length) { ctx.strokeStyle = css("--line"); ctx.strokeRect(X(0), Y(0), net.w * s, net.h * s); }
+  // linie relacji społecznych (top 3 powyżej progu)
+  for (const p of snap.players) {
+    if (mode === "personal" && p.i !== snap.sel) continue;
+    for (const [x, y, v] of p.links) {
+      ctx.strokeStyle = v > 0 ? "rgba(0," + Math.round(200 * Math.min(1, v)) + ",60,0.85)"
+                              : "rgba(" + Math.round(230 * Math.min(1, -v)) + ",30,30,0.85)";
+      ctx.lineWidth = 1 + 3 * Math.abs(v);
+      ctx.beginPath(); ctx.moveTo(X(p.x), Y(p.y)); ctx.lineTo(X(x), Y(y)); ctx.stroke();
+    }
+  }
+  // agenci: promień rośnie z normalized_visual_height (odpowiednik wysokości stożka)
+  for (const p of snap.players) {
+    const r = 3.5 + p.h * 0.6;
+    ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), r, 0, 2 * Math.PI);
+    ctx.fillStyle = COLORS[p.ch] || "#888"; ctx.fill();
+    ctx.lineWidth = p.i === snap.sel ? 3 : 1;
+    ctx.strokeStyle = p.i === snap.sel ? css("--focus") : css("--panel");
+    ctx.stroke();
+  }
+}
+function redraw() {
+  if (!snap) return;
+  drawMap($("mapMain"), $("layer").value);
+  drawMap($("mapMem"), "personal");
+  $("memTitle").textContent = "agent_memory – agent #" + snap.sel + (snap.sel_ch ? " (" + snap.sel_ch + ")" : "");
+  $("stCycle").textContent = snap.cycle; $("stGames").textContent = snap.nb_game;
+  const tot = snap.moves_C + snap.moves_D;
+  const stats = [
+    ["agentów", snap.players.length],
+    ["gier", snap.nb_game],
+    ["udział D", tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
+    ["znanych partnerów", snap.known.toFixed(2)],
+    ["różnych w oknie", snap.distinct.toFixed(2)],
+    ["zapomnień/cykl", snap.forgets],
+  ];
+  $("stats").replaceChildren(...stats.map(([k, v]) => {
+    const d = document.createElement("div"); d.className = "stat";
+    d.innerHTML = "<dt></dt><dd></dd>"; d.children[0].textContent = k; d.children[1].textContent = v; return d;
+  }));
+}
+function buildLegend(chars) {
+  $("legend").replaceChildren(...chars.map((c) => {
+    const s = document.createElement("span"); s.style.setProperty("--c", COLORS[c]); s.textContent = c; return s;
+  }));
+}
+function pickAgent(ev) {
+  if (!snap || !snap.players.length) return;
+  const cv = ev.currentTarget, rect = cv.getBoundingClientRect();
+  const mx = (ev.clientX - rect.left) * cv.width / rect.width, my = (ev.clientY - rect.top) * cv.height / rect.height;
+  const { X, Y } = fit(cv);
+  let best = null, bd = Infinity;
+  for (const p of snap.players) {
+    const d = Math.hypot(X(p.x) - mx, Y(p.y) - my);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (best && bd < 30) {
+    $("p_selected_index").value = best.i;
+    onParamChange("selected_index");
+    snap = JSON.parse(py.runPython("M.snapshot()"));
+    redraw();
+  }
+}
+
+// ---------- wykresy ----------
+function chartOpts(legend) {
+  const ink = css("--muted"), grid = css("--line");
+  return {
+    animation: false, responsive: true, maintainAspectRatio: false, parsing: false, normalized: true,
+    plugins: { legend: { display: legend, labels: { color: ink, boxWidth: 10, font: { size: 11 } } } },
+    scales: { x: { type: "linear", ticks: { color: ink }, grid: { color: grid }, title: { display: true, text: "cykl", color: ink } },
+              y: { ticks: { color: ink }, grid: { color: grid } } },
+    elements: { point: { radius: 0 }, line: { borderWidth: 1.5 } },
+  };
+}
+function resetCharts() {
+  lastChartCycle = -1;
+  if (chartScore) chartScore.destroy();
+  if (chartDunbar) chartDunbar.destroy();
+  if (typeof Chart === "undefined") return;
+  chartScore = new Chart($("chartScore"), { type: "line", data: { datasets: [] }, options: chartOpts(false) });
+  chartDunbar = new Chart($("chartDunbar"), { type: "line", data: { datasets: [
+    { label: "średnio znanych partnerów", data: [], borderColor: css("--park") },
+    { label: "różni partnerzy w oknie", data: [], borderColor: css("--accent") },
+    { label: "zapomnienia / cykl", data: [], borderColor: css("--bad") },
+  ] }, options: chartOpts(true) });
+}
+function updateCharts(first = false) {
+  if (!chartScore || !snap) return;
+  lastChartCycle = snap.cycle;
+  const ds = chartScore.data.datasets;
+  if (first || ds.length !== snap.players.length) {
+    chartScore.data.datasets = snap.players.map((p) => ({ label: p.name + " " + p.ch, data: [], borderColor: COLORS[p.ch] }));
+    chartScore.options.plugins.legend.display = snap.players.length <= 12;
+  }
+  snap.players.forEach((p, i) => chartScore.data.datasets[i].data.push({ x: snap.cycle, y: p.fc }));
+  const d = chartDunbar.data.datasets;
+  d[0].data.push({ x: snap.cycle, y: snap.known });
+  d[1].data.push({ x: snap.cycle, y: snap.distinct });
+  d[2].data.push({ x: snap.cycle, y: snap.forgets });
+  chartScore.update("none"); chartDunbar.update("none");
+}
+
+// ---------- pobieranie CSV ----------
+function download(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a"); a.href = url; a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function buildSimDownloads() {
+  const box = $("simDownloads");
+  ["PD.csv", "ablation_results.csv", "regression_fingerprint.csv", "perf.csv"].forEach((n) => {
+    const b = document.createElement("button"); b.className = "btn"; b.textContent = n;
+    b.addEventListener("click", () => { if (hasModel) download(n, py.globals.get("_csv")(n)); });
+    box.append(b);
+  });
+}
+
+// ---------- batch ----------
+function buildBatch() {
+  const sel = $("bExp");
+  Object.keys(EXPS).forEach((k) => sel.add(new Option(k, k)));
+  const describe = () => {
+    const e = EXPS[sel.value];
+    const shown = Object.entries(e.params).filter(([k]) => !["variant_name", "log_games"].includes(k))
+      .map(([k, v]) => k + "=" + v).join(", ");
+    const among = Object.entries(e.among || {}).map(([k, v]) => k + " ∈ {" + v.join(", ") + "}").join("; ");
+    $("bSpec").textContent = "Oryginał: repeat " + e.repeat + ", until cycle > " + e.until +
+      (e.seed ? ", seed " + e.seed : "") + ". Parametry: " + shown + (among ? ". Kombinacje: " + among : "") + ".";
+    $("bEnd").value = e.until === "regression_cycle" ? (e.params.regression_cycle || 2000) : 2000;
+    $("bSeed").placeholder = e.seed ? String(e.seed) : "losowy";
+  };
+  sel.addEventListener("change", describe); describe();
+  $("bRun").addEventListener("click", runBatch);
+  $("bStop").addEventListener("click", () => { batchStop = true; });
+}
+async function runBatch() {
+  const name = $("bExp").value;
+  const repeat = parseInt($("bRepeat").value, 10) || 1;
+  const end = parseInt($("bEnd").value, 10) || 1;
+  const seedTxt = $("bSeed").value.trim();
+  py.globals.set("_bname", name);
+  py.globals.set("_brep", repeat);
+  py.globals.set("_bend", end);
+  py.globals.set("_bseed", seedTxt === "" ? null : parseInt(seedTxt, 10));
+  try {
+    py.runPython("B = sipd.BatchRun(_bname, repeat=_brep, end_cycle=_bend, geojson=GEO, seed=_bseed)");
+  } catch (e) { $("bProgTxt").textContent = pyError(e); return; }
+  batchStop = false;
+  $("bRun").disabled = true; $("bStop").disabled = false;
+  $("bTable").replaceChildren(); $("bSummary").replaceChildren(); $("bDownloads").replaceChildren();
+  const t0 = performance.now();
+  let done = false;
+  while (!done && !batchStop) {
+    try { done = py.runPython("B.advance(3000)"); }
+    catch (e) { $("bProgTxt").textContent = pyError(e); break; }
+    const pr = JSON.parse(py.runPython("B.progress()"));
+    $("bProg").max = pr.total; $("bProg").value = pr.done + (pr.limit ? pr.cycle / (pr.limit + 1) : 0);
+    $("bProgTxt").textContent = "przebieg " + Math.min(pr.done + 1, pr.total) + " / " + pr.total +
+      " · cykl " + pr.cycle + " / " + pr.limit + " · " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  $("bRun").disabled = false; $("bStop").disabled = true;
+  if (batchStop) $("bProgTxt").textContent += " · zatrzymano";
+  showBatchResults();
+}
+function table(headers, rows, numericFrom = 1) {
+  const t = document.createElement("table");
+  const tr = document.createElement("tr");
+  headers.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i >= numericFrom) th.className = "num"; tr.append(th); });
+  const thead = document.createElement("thead"); thead.append(tr); t.append(thead);
+  const tb = document.createElement("tbody");
+  rows.forEach((r) => {
+    const row = document.createElement("tr");
+    r.forEach((v, i) => {
+      const td = document.createElement("td");
+      td.textContent = typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(3)) : v;
+      if (i >= numericFrom) td.className = "num mono";
+      row.append(td);
+    });
+    tb.append(row);
+  });
+  t.append(tb); return t;
+}
+function parseCsv(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const head = lines[0].split(",");
+  const rows = lines.slice(1).map((l) => l.split(",").map((v) => (v !== "" && !isNaN(v) ? +v : v)));
+  return { head, rows };
+}
+function showBatchResults() {
+  const abl = parseCsv(py.globals.get("_batch_csv")("ablation_results.csv"));
+  const fp = parseCsv(py.globals.get("_batch_csv")("regression_fingerprint.csv"));
+  const use = abl.rows.length ? ["ablation_results.csv", abl] : (fp.rows.length ? ["regression_fingerprint.csv", fp] : null);
+  if (!use) return;
+  const [fname, data] = use;
+  if (fname === "ablation_results.csv") {
+    const cols = data.head.slice(1);
+    const mean = cols.map((_, j) => data.rows.reduce((s, r) => s + r[j + 1], 0) / data.rows.length);
+    const sd = cols.map((_, j) => Math.sqrt(data.rows.reduce((s, r) => s + (r[j + 1] - mean[j]) ** 2, 0) / Math.max(1, data.rows.length - 1)));
+    const h = document.createElement("h3"); h.textContent = "Średnia ± odchylenie (" + data.rows.length + " przebiegów)";
+    $("bSummary").replaceChildren(h, table(["", ...cols], [["średnia", ...mean], ["odch. std.", ...sd]]));
+  }
+  $("bTable").replaceChildren(table(data.head, data.rows));
+  const b = document.createElement("button"); b.className = "btn"; b.textContent = "Pobierz " + fname;
+  b.addEventListener("click", () => download(fname, py.globals.get("_batch_csv")(fname)));
+  $("bDownloads").replaceChildren(b);
+}
+
+// ---------- testy ----------
+function runTests() {
+  const res = JSON.parse(py.runPython("sipd.run_self_tests_json()"));
+  const ok = res.filter((r) => r.ok).length;
+  $("tSummary").textContent = ok + " / " + res.length + " testów przeszło";
+  const t = table(["test", "wynik", "szczegóły"], []);
+  const tb = t.querySelector("tbody");
+  res.forEach((r) => {
+    const tr = document.createElement("tr");
+    const a = document.createElement("td"); a.className = "mono"; a.textContent = r.name;
+    const b = document.createElement("td"); b.className = r.ok ? "ok" : "fail"; b.textContent = r.ok ? "OK" : "BŁĄD";
+    const c = document.createElement("td"); c.textContent = r.msg;
+    tr.append(a, b, c); tb.append(tr);
+  });
+  $("tTable").replaceChildren(t);
+}
+
+// ---------- zdarzenia ----------
+document.querySelectorAll("nav.tabs button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav.tabs button").forEach((x) => x.setAttribute("aria-selected", x === b ? "true" : "false"));
+  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== b.dataset.tab; });
+}));
+$("btnInit").addEventListener("click", initModel);
+$("btnRun").addEventListener("click", () => (running ? stop() : start()));
+$("btnStep").addEventListener("click", () => { stop(); if (stepOnce(1)) { redraw(); updateCharts(); } });
+$("layer").addEventListener("change", redraw);
+$("mapMain").addEventListener("click", pickAgent);
+$("mapMem").addEventListener("click", pickAgent);
+$("tRun").addEventListener("click", runTests);
+$("geoFile").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0]; if (!f || !py) return;
+  py.globals.set("_geo_text", await f.text());
+  try {
+    const info = JSON.parse(py.runPython("sipd.PathNetwork.from_geojson(_geo_text); GEO = _geo_text; json.dumps({'ok': True})"));
+    if (info.ok) $("geoInfo").textContent = "Wczytano " + f.name + ". Kliknij Inicjalizuj.";
+  } catch (e) { $("geoInfo").textContent = "Błąd pliku " + f.name + ": " + pyError(e); }
+});
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redraw(); });
+buildSimDownloads();
+boot();
+</script>
+</body>
+</html>
