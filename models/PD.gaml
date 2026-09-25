@@ -71,6 +71,16 @@ global {
 	string variant_name <- "unset";
 	bool log_games <- true;  // zapis każdej gry do konsoli i PD.csv - wyłączane w batchach
 
+	// --- diagnostyka: odcisk przebiegu (test regresyjny nr 1) i pomiar wydajności ---
+	// nic tu nie losuje i nie wpływa na dynamikę
+	int nb_moves_C <- 0;
+	int nb_moves_D <- 0;
+	bool regression_export <- false;
+	int regression_cycle <- 2000;
+	bool perf_log <- false;
+	int perf_interval <- 100;
+	float perf_last_time <- 0.0;
+
 	int vision_radius <- 10;
 	int world_size <- 10;
 
@@ -206,6 +216,39 @@ global {
 			aqlearn_clique_fraction(),
 			aqlearn_avg_distance()
 		] to: "../results/ablation_results.csv" rewrite: false format: "csv" header: true;
+	}
+
+	// odcisk przebiegu: przy tym samym seedzie i wyłączonych modułach musi być identyczny przed i po zmianach
+	reflex export_regression_fingerprint when: regression_export and cycle = regression_cycle {
+		float score_sum <- 0.0;
+		float score_weighted <- 0.0;   // ważona pozycją - wykrywa też zamianę wyników między agentami
+		float loc_sum <- 0.0;          // wykrywa rozjazd trajektorii
+		float q_sum <- 0.0;
+		int i <- 1;
+		loop p over: player sort_by each.name {
+			score_sum <- score_sum + float(p.score);
+			score_weighted <- score_weighted + i * float(p.score);
+			loc_sum <- loc_sum + i * (p.location.x + p.location.y);
+			loop m over: p.q_c_per_other.values { q_sum <- q_sum + sum(m.values); }
+			loop m over: p.q_d_per_other.values { q_sum <- q_sum - sum(m.values); }
+			i <- i + 1;
+		}
+		float disorder_sum <- sum(environment_cell collect each.disorder);
+		save [variant_name, unlimited_games, seed, cycle, nb_game, nb_moves_C, nb_moves_D,
+			score_sum, score_weighted, loc_sum, q_sum, disorder_sum]
+			to: "../results/regression_fingerprint.csv" rewrite: false format: "csv" header: true;
+	}
+
+	// czas cyklu w ms, uśredniony po perf_interval cyklach
+	reflex perf_measure when: perf_log and every(perf_interval) {
+		float now <- machine_time;
+		if cycle > 0 {
+			float ms_per_cycle <- (now - perf_last_time) / perf_interval;
+			write "[perf] cykl " + cycle + " N=" + length(player) + ": " + ms_per_cycle + " ms/cykl";
+			save [variant_name, length(player), cycle, ms_per_cycle]
+				to: "../results/perf.csv" rewrite: false format: "csv" header: true;
+		}
+		perf_last_time <- now;
 	}
 
 	string pair_key(player a, player b) {
@@ -370,6 +413,10 @@ species game{
 			p2_payoff <- payoff_T;
 			p1_payoff <- payoff_S;
 		}
+
+		// liczniki ruchów - odcisk regresyjny i udział defekcji
+		nb_moves_D <- nb_moves_D + (p1_move = "D" ? 1 : 0) + (p2_move = "D" ? 1 : 0);
+		nb_moves_C <- nb_moves_C + (p1_move = "C" ? 1 : 0) + (p2_move = "C" ? 1 : 0);
 
 		float bump <- world.disorder_bump_for(p1_move, p2_move);
 		if bump > 0 {
@@ -894,6 +941,11 @@ experiment PD type: gui {
 	parameter "Czułość społeczna AQLEARN" var: social_sensitivity_aqlearn category: "Środowisko";
 	parameter "Wzmocnienie uczenia społecznego AQLEARN" var: social_learning_boost_aqlearn category: "Środowisko";
 
+	parameter "Pomiar czasu cyklu" var: perf_log category: "Diagnostyka";
+	parameter "Okno pomiaru (cykle)" var: perf_interval min: 1 category: "Diagnostyka";
+	parameter "Eksport odcisku regresyjnego" var: regression_export category: "Diagnostyka";
+	parameter "Cykl odcisku" var: regression_cycle min: 1 category: "Diagnostyka";
+
 	output {
 		display abc {
 			species environment_cell aspect: summary;
@@ -1003,6 +1055,32 @@ experiment F_broken_windows_anchor type: batch repeat: 30 until: cycle > end_cyc
 	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 2.0;
 	parameter "broken_windows_sensitivity" var: broken_windows_sensitivity init: 0.4;
 	parameter "base_character_qlearn" var: base_character_qlearn init: "TFT";
+	parameter "character_strength_qlearn" var: character_strength_qlearn init: 0.6;
+}
+
+// Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
+// regression_fingerprint.csv muszą być identyczne. Populacja celowo włącza wszystkie mechanizmy JASSS.
+experiment R0_regression type: batch repeat: 3 keep_seed: true until: cycle > regression_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "R0_regression";
+	parameter "log_games" var: log_games init: false;
+	parameter "regression_export" var: regression_export init: true;
+	parameter "regression_cycle" var: regression_cycle init: 2000;
+	parameter "unlimited_games" var: unlimited_games among: [false, true];
+	parameter "nb_QLEARN" var: nb_QLEARN init: 6;
+	parameter "nb_AQLEARN" var: nb_AQLEARN init: 6;
+	parameter "nb_TFT" var: nb_TFT init: 2;
+	parameter "nb_ALLC" var: nb_ALLC init: 2;
+	parameter "nb_ALLD" var: nb_ALLD init: 2;
+	parameter "nb_FTFT" var: nb_FTFT init: 2;
+	parameter "nb_TF2T" var: nb_TF2T init: 2;
+	parameter "nb_GRIM" var: nb_GRIM init: 2;
+	parameter "nb_WSLS" var: nb_WSLS init: 2;
+	parameter "movement_sensitivity" var: movement_sensitivity init: 2.0;
+	parameter "env_influence_qlearn" var: env_influence_qlearn init: 0.5;
+	parameter "social_sensitivity_aqlearn" var: social_sensitivity_aqlearn init: 1.5;
+	parameter "social_learning_boost_aqlearn" var: social_learning_boost_aqlearn init: 2.0;
+	parameter "broken_windows_sensitivity" var: broken_windows_sensitivity init: 0.4;
 	parameter "character_strength_qlearn" var: character_strength_qlearn init: 0.6;
 }
 
