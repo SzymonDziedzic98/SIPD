@@ -78,20 +78,52 @@ def run_job(job):
     return m.compat_rows, m.timeseries_rows, m.encounter_rows
 
 
+def _norm(v):
+    try:
+        return repr(float(v))
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def job_signature(params, seed, keys):
+    return (params["variant_name"], _norm(seed)) + tuple(_norm(params[k]) for k in keys)
+
+
+def done_signatures(path, keys):
+    """Przebiegi już zapisane w compat CSV (do --resume po przerwaniu)."""
+    if not os.path.exists(path):
+        return set()
+    with open(path, encoding="utf-8") as f:
+        return {(r["variant_name"], _norm(r["seed"])) + tuple(_norm(r[k]) for k in keys)
+                for r in csv.DictReader(f)}
+
+
 def run(args):
     jobs = build_jobs(args.experiments, set(args.N), args.repeat, args.end_cycle)
+    resume = args.resume and os.path.exists(args.out)
+    if resume:
+        # klucze = parametry przeglądane w eksperymentach (wszystkie są kolumnami compat CSV)
+        keys = sorted({k for n in args.experiments for k in sipd.BATCH_EXPERIMENTS[n]["among"]})
+        done = done_signatures(args.out, keys)
+        before = len(jobs)
+        jobs = [j for j in jobs if job_signature(j[0], j[1], keys) not in done]
+        print("wznowienie: %d z %d przebiegów już zapisanych" % (before - len(jobs), before), flush=True)
     jobs.sort(key=lambda j: -(j[0]["compat_N"] * (4 if j[0]["well_mixed"] else 1)))   # najdroższe najpierw
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     t0 = time.time()
     ts_out = args.ts_out or args.out.replace(".csv", "_timeseries.csv")
     enc_out = args.out.replace(".csv", "_encounter_cells.csv")
-    with open(args.out, "w", newline="", encoding="utf-8") as f, \
-            open(ts_out, "w", newline="", encoding="utf-8") as ft, \
-            open(enc_out, "w", newline="", encoding="utf-8") as fe, Pool(args.workers) as pool:
+    mode = "a" if resume else "w"
+    enc_new = not (resume and os.path.exists(enc_out))
+    with open(args.out, mode, newline="", encoding="utf-8") as f, \
+            open(ts_out, mode, newline="", encoding="utf-8") as ft, \
+            open(enc_out, "w" if enc_new else "a", newline="", encoding="utf-8") as fe, Pool(args.workers) as pool:
         w, wt, we = csv.writer(f), csv.writer(ft), csv.writer(fe)
-        w.writerow(sipd.COMPAT_HEADER)
-        wt.writerow(sipd.CSV_HEADERS["character_timeseries.csv"])
-        we.writerow(sipd.CSV_HEADERS["encounter_cells.csv"])
+        if not resume:
+            w.writerow(sipd.COMPAT_HEADER)
+            wt.writerow(sipd.CSV_HEADERS["character_timeseries.csv"])
+        if enc_new:
+            we.writerow(sipd.CSV_HEADERS["encounter_cells.csv"])
         for i, (rows, ts, enc) in enumerate(pool.imap_unordered(run_job, jobs), 1):
             w.writerows(rows)
             wt.writerows(ts)
@@ -480,6 +512,7 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="compat_results.csv")
     ap.add_argument("--ts-out", help="plik szeregów czasowych (domyślnie <out>_timeseries.csv)")
+    ap.add_argument("--resume", action="store_true", help="dopisz tylko przebiegi, których nie ma jeszcze w --out")
     ap.add_argument("--verdict", metavar="CSV", help="tylko policz werdykty z istniejącego pliku")
     a = ap.parse_args()
     if a.verdict:
