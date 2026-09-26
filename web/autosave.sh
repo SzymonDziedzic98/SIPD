@@ -6,8 +6,10 @@ save() {
     git add -f "$@" 2>/dev/null
     if ! git diff --cached --quiet -- "$@"; then
         n=$(($(wc -l < "$1") - 1))
-        git commit -q -m "Pełny przegląd N = 500: częściowe wyniki ($n przebiegów)" -- "$@" && \
-            git push -q origin "$(git rev-parse --abbrev-ref HEAD)" || true
+        msg=$(mktemp)
+        printf 'Pełny przegląd N = 500: częściowe wyniki (%s przebiegów)\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_019k73S7cZJWPrBZf5HaTdxg\n' "$n" > "$msg"
+        git commit -q -F "$msg" -- "$@" && git push -q origin "$(git rev-parse --abbrev-ref HEAD)" || true
+        rm -f "$msg"
     fi
 }
 while pgrep -f "$PATTERN" > /dev/null; do
