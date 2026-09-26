@@ -175,9 +175,31 @@ global {
 		loop p over: player where (each.character in evolvable_characters) {
 			decisions[p] <- p.evolution_choice(p.pick_model());
 		}
+		float allc0 <- 0.0;
+		float sxy_k <- 0.0;
+		float sxx_k <- 0.0;
+		if kin_on {
+			allc0 <- (player count (each.character = "ALLC")) / length(player);
+			if blk_all[0] > 0 {
+				sxy_k <- blk_all[3] - blk_all[1] * blk_all[2] / blk_all[0];
+				sxx_k <- blk_all[4] - blk_all[1] * blk_all[1] / blk_all[0];
+			}
+		}
 		loop p over: decisions.keys {
 			string new_char <- decisions[p];
 			ask p { do change_character(new_char); }
+		}
+		if kin_on {
+			// test Hamiltona w interwale: znak zmiany udziału ALLC vs znak (r̂_k·b − c)
+			float d <- (player count (each.character = "ALLC")) / length(player) - allc0;
+			float pred <- sxx_k > 1e-12 ? (sxy_k / sxx_k) * b - c : 0.0;
+			if allc0 > 0 and allc0 < 1 and d != 0 and pred != 0 {
+				p4_intervals <- p4_intervals + 1;
+				if (d > 0) = (pred > 0) { p4_agree <- p4_agree + 1; }
+			}
+			do close_block(blk_all, fe_all);
+			do close_block(blk_kin, fe_kin);
+			do close_block(blk_win, fe_win);
 		}
 		ask player {
 			window_payoff <- 0.0;
@@ -199,7 +221,7 @@ global {
 	float kin_imitation_bias <- 0.0;       // P(model do imitacji spośród krewnych)
 	float kin_matching_prob <- 0.0;        // α: P(partner spośród krewnych), tylko well_mixed
 	string fitness_mode <- "own";          // "own" | "inclusive"
-	string inclusive_variant <- "add";     // DO DECYZJI: "add" | "strip"
+	string inclusive_variant <- "strip";   // "strip" (decyzja 19): π + r·(dane − otrzymane); "add" tylko do porównań
 	bool kin_reward_learners <- false;     // QLEARN/AQLEARN: nagroda + r * wypłata krewnego (nie włączać bez zgody)
 	int kin_window <- 1000;                // okno r̂ (cykle)
 	bool kin_export <- false;              // family_timeseries.csv
@@ -209,6 +231,16 @@ global {
 	list<float> kin_all <- [0.0, 0.0, 0.0, 0.0, 0.0];
 	list<float> kin_kin <- [0.0, 0.0, 0.0, 0.0, 0.0];
 	list<float> kin_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	// r̂ w obrębie bloków o stałym składzie (blok = interwał ewolucji): sumy bieżącego bloku
+	// i skumulowane [Sxy, Sxx] zamkniętych bloków; usuwa pozorną korelację ze zmian składu w czasie
+	list<float> blk_all <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	list<float> blk_kin <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	list<float> blk_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	list<float> fe_all <- [0.0, 0.0];
+	list<float> fe_kin <- [0.0, 0.0];
+	list<float> fe_win <- [0.0, 0.0];
+	int p4_intervals <- 0;                 // interwały ewolucji z testem znaku (P4)
+	int p4_agree <- 0;
 	int kin_games_total <- 0;
 	int kin_games_kin <- 0;
 	int kin_coop_kin <- 0;
@@ -241,6 +273,26 @@ global {
 		return (s[0] < 2 or den = 0) ? -999.0 : (s[0] * s[3] - s[1] * s[2]) / den;
 	}
 
+	// r̂ = Σ Sxy / Σ Sxx po blokach (z otwartym blokiem); -999, gdy x nie ma zmienności
+	float r_hat_within(list<float> blk, list<float> fe) {
+		float sxy <- fe[0];
+		float sxx <- fe[1];
+		if blk[0] > 0 {
+			sxy <- sxy + blk[3] - blk[1] * blk[2] / blk[0];
+			sxx <- sxx + blk[4] - blk[1] * blk[1] / blk[0];
+		}
+		return sxx <= 1e-12 ? -999.0 : sxy / sxx;
+	}
+
+	// zamyka blok przed zmianą składu populacji (krok ewolucji)
+	action close_block(list<float> blk, list<float> fe) {
+		if blk[0] > 0 {
+			fe[0] <- fe[0] + blk[3] - blk[1] * blk[2] / blk[0];
+			fe[1] <- fe[1] + blk[4] - blk[1] * blk[1] / blk[0];
+		}
+		loop i from: 0 to: 4 { blk[i] <- 0.0; }
+	}
+
 	action add_pair(list<float> s, float x, float y) {
 		s[0] <- s[0] + 1; s[1] <- s[1] + x; s[2] <- s[2] + y; s[3] <- s[3] + x * y; s[4] <- s[4] + x * x;
 	}
@@ -252,7 +304,12 @@ global {
 		loop pr over: [[x1, x2], [x2, x1]] {
 			do add_pair(kin_all, pr[0], pr[1]);
 			do add_pair(kin_win, pr[0], pr[1]);
-			if kin { do add_pair(kin_kin, pr[0], pr[1]); }
+			do add_pair(blk_all, pr[0], pr[1]);
+			do add_pair(blk_win, pr[0], pr[1]);
+			if kin {
+				do add_pair(kin_kin, pr[0], pr[1]);
+				do add_pair(blk_kin, pr[0], pr[1]);
+			}
 		}
 		if kin {
 			kin_games_kin <- kin_games_kin + 1;
@@ -295,10 +352,12 @@ global {
 	}
 
 	reflex close_kin_window when: kin_on and cycle > 0 and every(kin_window) {
-		float r <- r_hat(kin_win);
+		float r <- r_hat_within(blk_win, fe_win);
 		if r_hat_first_window = -999.0 { r_hat_first_window <- r; }
 		r_hat_last_window <- r;
 		kin_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+		blk_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+		fe_win <- [0.0, 0.0];
 	}
 
 	reflex export_families when: kin_on and kin_export and every(sample_interval) {
@@ -642,13 +701,16 @@ global {
 			kin_on ? string(kin_spatial_clustering) : "n/a", kin_on ? string(kin_strategy_correlation) : "n/a",
 			kin_on ? string(kin_imitation_bias) : "n/a", kin_on ? string(kin_matching_prob) : "n/a",
 			kin_on ? fitness_mode : "n/a", kin_on ? inclusive_variant : "n/a",
-			kin_on and r_hat(kin_all) != -999.0 ? string(r_hat(kin_all)) : "n/a",
-			kin_on and r_hat(kin_kin) != -999.0 ? string(r_hat(kin_kin)) : "n/a",
+			kin_on and r_hat_within(blk_all, fe_all) != -999.0 ? string(r_hat_within(blk_all, fe_all)) : "n/a",
+			kin_on and r_hat_within(blk_kin, fe_kin) != -999.0 ? string(r_hat_within(blk_kin, fe_kin)) : "n/a",
 			kin_on and r_hat_first_window != -999.0 ? string(r_hat_first_window) : "n/a",
 			kin_on and r_hat_last_window != -999.0 ? string(r_hat_last_window) : "n/a",
 			kin_on and kin_games_total > 0 ? string(kin_games_kin / kin_games_total) : "n/a",
 			kin_on and kin_moves_kin > 0 ? string(kin_coop_kin / kin_moves_kin) : "n/a",
-			kin_on and kin_moves_str > 0 ? string(kin_coop_str / kin_moves_str) : "n/a"]
+			kin_on and kin_moves_str > 0 ? string(kin_coop_str / kin_moves_str) : "n/a",
+			kin_on and r_hat(kin_all) != -999.0 ? string(r_hat(kin_all)) : "n/a",
+			kin_on ? string(p4_intervals) : "n/a",
+			kin_on and p4_intervals > 0 ? string(p4_agree / p4_intervals) : "n/a"]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -3070,6 +3132,30 @@ experiment test_module3_config type: test {
         }
         assert abs(world.r_hat(s) - 0.5) < 0.000001;
         assert world.r_hat([0.0, 0.0, 0.0, 0.0, 0.0]) = -999.0;
+    }
+
+    test "r̂ w blokach: zmiana składu nie zawyża r̂" {
+        list<float> s <- [0.0, 0.0, 0.0, 0.0, 0.0];
+        list<float> blk <- [0.0, 0.0, 0.0, 0.0, 0.0];
+        list<float> fe <- [0.0, 0.0];
+        ask world {
+            // blok A: same C
+            do add_pair(s, 1.0, 1.0); do add_pair(s, 1.0, 1.0);
+            do add_pair(blk, 1.0, 1.0); do add_pair(blk, 1.0, 1.0);
+            do close_block(blk, fe);
+            // blok B: same D
+            do add_pair(s, 0.0, 0.0); do add_pair(s, 0.0, 0.0);
+            do add_pair(blk, 0.0, 0.0); do add_pair(blk, 0.0, 0.0);
+            do close_block(blk, fe);
+        }
+        assert world.r_hat_within(blk, fe) = -999.0;
+        ask world {
+            // blok C: nachylenie 0,5
+            do add_pair(s, 1.0, 1.0); do add_pair(s, 1.0, 0.0); do add_pair(s, 0.0, 0.0); do add_pair(s, 0.0, 0.0);
+            do add_pair(blk, 1.0, 1.0); do add_pair(blk, 1.0, 0.0); do add_pair(blk, 0.0, 0.0); do add_pair(blk, 0.0, 0.0);
+        }
+        assert abs(world.r_hat(s) - 0.75) < 0.000001;
+        assert abs(world.r_hat_within(blk, fe) - 0.5) < 0.000001;
     }
 }
 

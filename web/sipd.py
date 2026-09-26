@@ -120,7 +120,7 @@ DEFAULTS = {
     "kin_imitation_bias": 0.0,         # P(model do imitacji wybierany spośród krewnych)
     "kin_matching_prob": 0.0,          # α: P(partner spośród krewnych), tylko well_mixed
     "fitness_mode": "own",             # "own" | "inclusive"
-    "inclusive_variant": "add",        # DO DECYZJI: "add" (π + r·dane) albo "strip" (π + r·(dane - otrzymane))
+    "inclusive_variant": "strip",      # decyzja 19: "strip" (π + r·(dane - otrzymane)); "add" tylko do porównań
     "kin_reward_learners": False,      # QLEARN/AQLEARN: nagroda + r·wypłata krewnego (nie włączać bez zgody)
     "kin_window": 1000,                # okno r̂ (cykle)
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
@@ -539,8 +539,14 @@ class KinStats:
     Każda gra daje dwie pary uporządkowane (x=mój ruch, y=ruch partnera)."""
 
     def __init__(self):
-        self.all = [0, 0.0, 0.0, 0.0, 0.0]      # n, Σx, Σy, Σxy, Σx²
+        self.all = [0, 0.0, 0.0, 0.0, 0.0]      # n, Σx, Σy, Σxy, Σx² (całe okno, bez podziału)
         self.kin = [0, 0.0, 0.0, 0.0, 0.0]
+        # r̂ w obrębie bloków o stałym składzie (blok = interwał ewolucji): sumy bieżącego bloku
+        # i skumulowane Sxy, Sxx zamkniętych bloków; usuwa pozorną korelację ze zmian składu w czasie
+        self.blk_all = [0, 0.0, 0.0, 0.0, 0.0]
+        self.blk_kin = [0, 0.0, 0.0, 0.0, 0.0]
+        self.fe_all = [0.0, 0.0]
+        self.fe_kin = [0.0, 0.0]
         self.games = self.kin_games = 0
         self.coop_kin = self.moves_kin = self.coop_str = self.moves_str = 0
 
@@ -557,8 +563,10 @@ class KinStats:
         self.games += 1
         for x, y in ((x1, x2), (x2, x1)):
             self._add(self.all, x, y)
+            self._add(self.blk_all, x, y)
             if kin:
                 self._add(self.kin, x, y)
+                self._add(self.blk_kin, x, y)
         if kin:
             self.kin_games += 1
             self.coop_kin += int(x1 + x2)
@@ -574,8 +582,31 @@ class KinStats:
         den = n * sxx - sx * sx
         return None if n < 2 or den == 0 else (n * sxy - sx * sy) / den
 
+    @staticmethod
+    def _within(b):
+        """(Sxy, Sxx) bloku: odchylenia od średnich bloku."""
+        n, sx, sy, sxy, sxx = b
+        return (0.0, 0.0) if n == 0 else (sxy - sx * sy / n, sxx - sx * sx / n)
+
+    def close_block(self):
+        """Zamyka blok (przed zmianą składu populacji, np. przed krokiem ewolucji)."""
+        for b, fe in ((self.blk_all, self.fe_all), (self.blk_kin, self.fe_kin)):
+            sxy, sxx = self._within(b)
+            fe[0] += sxy
+            fe[1] += sxx
+            b[:] = [0, 0.0, 0.0, 0.0, 0.0]
+
+    @classmethod
+    def r_hat_within(cls, b, fe):
+        """r̂ = Σ Sxy / Σ Sxx po blokach (z otwartym blokiem); None, gdy brak zmienności x."""
+        sxy, sxx = cls._within(b)
+        sxy, sxx = fe[0] + sxy, fe[1] + sxx
+        return None if sxx <= 1e-12 else sxy / sxx
+
     def summary(self):
-        return dict(r_hat_all=self.r_hat(self.all), r_hat_kin=self.r_hat(self.kin),
+        return dict(r_hat_all=self.r_hat_within(self.blk_all, self.fe_all),
+                    r_hat_kin=self.r_hat_within(self.blk_kin, self.fe_kin),
+                    r_hat_all_pooled=self.r_hat(self.all),
                     kin_share=self.kin_games / self.games if self.games else None,
                     coop_kin=self.coop_kin / self.moves_kin if self.moves_kin else None,
                     coop_str=self.coop_str / self.moves_str if self.moves_str else None)
@@ -1267,6 +1298,7 @@ class Model:
         self.families = []            # Moduł 3: listy graczy wg family_id
         self.kin_stats = KinStats()   # cały przebieg
         self.kin_window_stats = KinStats()
+        self.p4_intervals = self.p4_agree = 0   # interwały ewolucji z testem znaku (P4)
         self.kin_first_window = None
         self.kin_last_window = None
         self.timeseries_rows = []     # character_timeseries.csv
@@ -1634,7 +1666,8 @@ class Model:
         return cols + [P.family_size, P.family_r, P.kin_spatial_clustering, P.kin_strategy_correlation,
                        P.kin_imitation_bias, P.kin_matching_prob, P.fitness_mode, P.inclusive_variant,
                        na(s["r_hat_all"]), na(s["r_hat_kin"]), na(fw.get("r_hat_all")), na(lw.get("r_hat_all")),
-                       na(s["kin_share"]), na(s["coop_kin"]), na(s["coop_str"])]
+                       na(s["kin_share"]), na(s["coop_kin"]), na(s["coop_str"]), na(s["r_hat_all_pooled"]),
+                       self.p4_intervals, self.p4_agree / self.p4_intervals if self.p4_intervals else "n/a"]
 
     # --- zdarzenie po grze i metryka stabilności spotkań ----------------------
     def on_game_played(self, g):
@@ -1679,8 +1712,20 @@ class Model:
         # synchronicznie: decyzje na starych charakterach i π, potem zmiana; okna zerowane u wszystkich
         evolvable = self.p.evolvable_characters
         decisions = [(p, p.evolution_choice(p.pick_model())) for p in self.players if p.character in evolvable]
+        if self.p.kin_on:
+            allc0 = self.share_of("ALLC")
+            sxy, sxx = KinStats._within(self.kin_stats.blk_all)
         for p, new_char in decisions:
             p.change_character(new_char)
+        if self.p.kin_on:
+            # test Hamiltona w interwale: znak zmiany udziału ALLC vs znak (r̂_k·b - c)
+            d = self.share_of("ALLC") - allc0
+            pred = (sxy / sxx) * self.p.b - self.p.c if sxx > 1e-12 else 0.0
+            if 0.0 < allc0 < 1.0 and d != 0 and pred != 0:
+                self.p4_intervals += 1
+                self.p4_agree += int((d > 0) == (pred > 0))
+            self.kin_stats.close_block()
+            self.kin_window_stats.close_block()
         for p in self.players:
             p.window_payoff = 0.0
             p.window_games = 0
@@ -1860,7 +1905,8 @@ TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", 
 KIN_HEADER = ["payoff_mode", "b", "c", "c_over_b", "kin_on", "family_size", "family_r", "kin_spatial_clustering",
               "kin_strategy_correlation", "kin_imitation_bias", "kin_matching_prob", "fitness_mode",
               "inclusive_variant", "r_hat_all", "r_hat_kin", "r_hat_first_window", "r_hat_last_window",
-              "kin_interaction_share", "coop_with_kin", "coop_with_strangers"]
+              "kin_interaction_share", "coop_with_kin", "coop_with_strangers", "r_hat_all_pooled",
+              "p4_intervals", "p4_sign_agreement"]
 
 NET_STAT_KEYS = ["net_nodes", "net_edges", "net_mean_degree", "net_avg_path", "net_density",
                  "net_betw_max", "net_betw_mean"]
@@ -2814,6 +2860,24 @@ def t_r_hat_known_values():
     assert KinStats.r_hat(KinStats().all) is None
 
 
+def t_r_hat_within_blocks():
+    # blok A: same C, blok B: same D (zmiana składu, brak korelacji w bloku), blok C: nachylenie 0,5
+    s = KinStats()
+    for block in (((1, 1), (1, 1)), ((0, 0), (0, 0)), ((1, 1), (1, 0), (0, 0), (0, 0))):
+        for x, y in block:
+            KinStats._add(s.all, x, y)
+            KinStats._add(s.blk_all, x, y)
+        s.close_block()
+    assert abs(KinStats.r_hat(s.all) - 0.75) < 1e-12                      # łącznie: zawyżone
+    assert abs(KinStats.r_hat_within(s.blk_all, s.fe_all) - 0.5) < 1e-12  # w blokach: 0,5
+    t = KinStats()
+    for block in (((1, 1), (1, 1)), ((0, 0), (0, 0))):
+        for x, y in block:
+            KinStats._add(t.blk_all, x, y)
+        t.close_block()
+    assert KinStats.r_hat_within(t.blk_all, t.fe_all) is None            # brak zmienności w blokach
+
+
 def t_inclusive_equals_own_at_r0():
     for variant in ("add", "strip"):
         m = _kin_model(fitness_mode="inclusive", inclusive_variant=variant, family_r=0.0, kin_matching_prob=0.5).run(200)
@@ -2836,7 +2900,9 @@ def t_inclusive_components():
     _game(m, a, b, "k1")
     assert (a.window_kin_given, a.window_kin_received) == (1.0, 0.0)
     assert (b.window_kin_given, b.window_kin_received) == (0.0, 1.0)
+    m.p.inclusive_variant = "add"
     assert abs(a.compute_pi() - (-0.3 + 0.5 * 1.0)) < 1e-12           # add
+    assert abs(b.compute_pi() - (1.0 + 0.5 * 0.0)) < 1e-12            # add: otrzymane zostaje w π_own
     m.p.inclusive_variant = "strip"
     assert abs(b.compute_pi() - (1.0 + 0.5 * (0.0 - 1.0))) < 1e-12     # strip
 

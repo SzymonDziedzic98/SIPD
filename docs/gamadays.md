@@ -89,3 +89,16 @@ wyraźnego progu. Stąd decyzja 12.
 | 14 | Liczniki okien stabilizacji (`stab_count`, `stabilized_at`) zostają w kodzie, choć nie trafiają do CSV. |
 | 15 | Nazwa wariantu `fragmented` zostaje; wariant redukuje redundancję (krawędzie w cyklach), liczba usuniętych krawędzi w `net_edges_removed`. |
 | 16 | `feedback_value` pozostaje niezależne od macierzy wypłat; przy snowdrifcie z ruchem/uczeniem środowiskowym model wypisuje ostrzeżenie. |
+
+## Moduł 3 – pokrewieństwo (decyzje)
+
+| Nr | Decyzja |
+|---|---|
+| 17 | Eksperymenty P4: `pair_cooldown = 0` (bez blokady ponownej gry pary). Domyślnie 10, jak dotąd. Przy 10 zadane α nie odpowiada zmierzonemu r̂ (α 0,3 → r̂ 0,20). |
+| 18 | r̂ liczone z ruchów (C = 1, D = 0), także dla strategii warunkowych. |
+| 19 | `fitness_mode = "inclusive"` w wariancie `"strip"`: π = własna średnia + r·(Σ skutków moich ruchów dla krewnych − Σ skutków ruchów krewnych dla mnie) / gry. Skutek = wypłata partnera przy moim ruchu − jego wypłata, gdybym zagrał D. `"add"` tylko do porównań. |
+| 20 | r̂ liczone w obrębie interwałów ewolucji (skład populacji stały): Σ Sxy / Σ Sxx po blokach. Regresja z całego okna jest zawyżona przez zmiany składu w czasie (np. α = 0 → r̂ 0,3). Wersja łączna zostaje w kolumnie `r_hat_all_pooled`. |
+
+Test znaku (`p4_intervals`, `p4_sign_agreement`): w każdym interwale ewolucji, przy 0 < udział ALLC < 1,
+porównanie znaku zmiany udziału ALLC ze znakiem r̂_k·b − c (r̂_k z gier tego interwału). Zmiana obejmuje
+też mutacje.
