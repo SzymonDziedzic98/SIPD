@@ -108,6 +108,24 @@ DEFAULTS = {
     # stabilność spotkań
     "encounter_window": 1000,
     "encounter_export": False,
+    # --- Moduł 3: pokrewieństwo (Hamilton); wymaga evolution_on ---
+    "payoff_mode": "classic",          # "classic" | "donation" (R=b-c, S=-c, T=b, P=0)
+    "b": 1.0,
+    "c": 0.3,
+    "kin_on": False,
+    "family_size": 10,
+    "family_r": 0.5,                   # nominalne r w rodzinie (do fitness_mode "inclusive")
+    "kin_spatial_clustering": 0.0,     # 0 = losowe położenia, 1 = rodzina startuje w jednym węźle
+    "kin_strategy_correlation": 0.0,   # P(członek dostaje strategię rodziny przy starcie)
+    "kin_imitation_bias": 0.0,         # P(model do imitacji wybierany spośród krewnych)
+    "kin_matching_prob": 0.0,          # α: P(partner spośród krewnych), tylko well_mixed
+    "fitness_mode": "own",             # "own" | "inclusive"
+    "inclusive_variant": "add",        # DO DECYZJI: "add" (π + r·dane) albo "strip" (π + r·(dane - otrzymane))
+    "kin_reward_learners": False,      # QLEARN/AQLEARN: nagroda + r·wypłata krewnego (nie włączać bez zgody)
+    "kin_window": 1000,                # okno r̂ (cykle)
+    # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
+    "pair_cooldown": 10,
+    "kin_export": False,               # family_timeseries.csv
     "vision_radius": 10,
     "world_size": 10,
     "payoff_R": 5.0, "payoff_P": 1.0, "payoff_T": 9.0, "payoff_S": 0.0,
@@ -183,6 +201,17 @@ GUI_PARAMETERS = [
     ]),
     ("Stabilność spotkań", [
         ("encounter_window", "Okno metryki spotkań (cykle)"),
+    ]),
+    ("Moduł 3 – pokrewieństwo", [
+        ("kin_on", "Rodziny (wymaga ewolucji)"),
+        ("payoff_mode", "Tryb wypłat"),
+        ("b", "b (korzyść)"), ("c", "c (koszt)"),
+        ("family_size", "Wielkość rodziny"), ("family_r", "r w rodzinie"),
+        ("kin_spatial_clustering", "Skupienie przestrzenne rodzin"),
+        ("kin_strategy_correlation", "Korelacja strategii w rodzinie"),
+        ("kin_imitation_bias", "Imitacja krewnych"),
+        ("kin_matching_prob", "α: dobór krewnych (well_mixed)"),
+        ("fitness_mode", "Dopasowanie"), ("inclusive_variant", "Wariant inclusive"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -505,6 +534,53 @@ class PathNetwork:
 # agenci
 # ---------------------------------------------------------------------------
 
+class KinStats:
+    """Sumy do r̂ (regresja ruchu partnera na własny ruch, C=1, D=0) i udziałów interakcji z krewnymi.
+    Każda gra daje dwie pary uporządkowane (x=mój ruch, y=ruch partnera)."""
+
+    def __init__(self):
+        self.all = [0, 0.0, 0.0, 0.0, 0.0]      # n, Σx, Σy, Σxy, Σx²
+        self.kin = [0, 0.0, 0.0, 0.0, 0.0]
+        self.games = self.kin_games = 0
+        self.coop_kin = self.moves_kin = self.coop_str = self.moves_str = 0
+
+    @staticmethod
+    def _add(s, x, y):
+        s[0] += 1
+        s[1] += x
+        s[2] += y
+        s[3] += x * y
+        s[4] += x * x
+
+    def record(self, m1, m2, kin):
+        x1, x2 = (m1 == "C") * 1.0, (m2 == "C") * 1.0
+        self.games += 1
+        for x, y in ((x1, x2), (x2, x1)):
+            self._add(self.all, x, y)
+            if kin:
+                self._add(self.kin, x, y)
+        if kin:
+            self.kin_games += 1
+            self.coop_kin += int(x1 + x2)
+            self.moves_kin += 2
+        else:
+            self.coop_str += int(x1 + x2)
+            self.moves_str += 2
+
+    @staticmethod
+    def r_hat(s):
+        """Nachylenie regresji y na x; None, gdy x nie ma zmienności."""
+        n, sx, sy, sxy, sxx = s
+        den = n * sxx - sx * sx
+        return None if n < 2 or den == 0 else (n * sxy - sx * sy) / den
+
+    def summary(self):
+        return dict(r_hat_all=self.r_hat(self.all), r_hat_kin=self.r_hat(self.kin),
+                    kin_share=self.kin_games / self.games if self.games else None,
+                    coop_kin=self.coop_kin / self.moves_kin if self.moves_kin else None,
+                    coop_str=self.coop_str / self.moves_str if self.moves_str else None)
+
+
 class Cell:
     __slots__ = ("index", "col", "row", "disorder", "x0", "y0", "w", "h", "enc_games", "enc_rep_rem",
                  "enc_rep_ever", "last_share_rem", "last_share_ever", "total_games", "total_rep_rem",
@@ -547,7 +623,7 @@ class Game:
         self.model = model
         self.pair_key = pair_key
         self.p1, self.p2 = p1, p2
-        self.lifespan = 10
+        self.lifespan = model.p.pair_cooldown
         self.location = location
         m, P = model, model.p
 
@@ -618,10 +694,26 @@ class Game:
         p2.window_payoff += p2_payoff
         p2.window_games += 1
 
+        # Moduł 3: skutek mojego ruchu dla krewnego = jego wypłata minus jego wypłata, gdybym zagrał D
+        kin = P.kin_on and p1.family_id >= 0 and p1.family_id == p2.family_id
+        if P.kin_on and p1_move in ("C", "D") and p2_move in ("C", "D"):
+            m.kin_stats.record(p1_move, p2_move, kin)
+            m.kin_window_stats.record(p1_move, p2_move, kin)
+            if kin:
+                d12 = m.payoff_of(p2_move, p1_move) - m.payoff_of(p2_move, "D")
+                d21 = m.payoff_of(p1_move, p2_move) - m.payoff_of(p1_move, "D")
+                p1.window_kin_given += d12
+                p2.window_kin_received += d12
+                p2.window_kin_given += d21
+                p1.window_kin_received += d21
+
+        r1, r2 = p1_payoff, p2_payoff
+        if kin and P.kin_reward_learners:        # preferencja, nie selekcja - nie w teście Hamiltona
+            r1, r2 = p1_payoff + P.family_r * p2_payoff, p2_payoff + P.family_r * p1_payoff
         if p1.character in LEARNERS:
-            p1.update_q(p2, p1_payoff)
+            p1.update_q(p2, r1)
         if p2.character in LEARNERS:
-            p2.update_q(p1, p2_payoff)
+            p2.update_q(p1, r2)
 
         p1.touch_partner(p2)
         p2.touch_partner(p1)
@@ -635,7 +727,7 @@ class Game:
 
     def step(self):
         self.lifespan -= 1
-        if self.lifespan == 0:
+        if self.lifespan <= 0:               # <= : przy pair_cooldown = 0 gra znika w następnym kroku
             self.model.active_pairs.pop(self.pair_key, None)
             return False
         return True
@@ -654,6 +746,9 @@ class Player:
         self.nb_forgotten = 0
         self.window_payoff = 0.0
         self.window_games = 0
+        self.family_id = -1                # Moduł 3: stały przez cały przebieg
+        self.window_kin_given = 0.0        # Σ skutków moich ruchów dla krewnych w oknie
+        self.window_kin_received = 0.0     # Σ skutków ruchów krewnych dla mnie w oknie
         self.history_offset = {}
         self.met_count = {}           # metryka: gry z partnerem od początku (zapominanie jej nie rusza)
         self.enc_games = self.enc_rep_rem = self.enc_rep_ever = 0
@@ -775,8 +870,17 @@ class Player:
         return len(self.last_met_cycle)
 
     # --- Moduł 2: ewolucja -----------------------------------------------
+    def relatives(self):
+        if self.family_id < 0:
+            return []
+        return [q for q in self.model.families[self.family_id] if q is not self]
+
     def pick_model(self):
         m = self.model
+        if m.p.kin_on and m.p.kin_imitation_bias > 0 and self.flip(m.p.kin_imitation_bias):
+            rel = self.relatives()                 # krewni niezależnie od odległości
+            if rel:
+                return m.rng.choice(rel)
         if m.p.well_mixed:
             pool = [q for q in m.players if q is not self]
         else:
@@ -796,8 +900,22 @@ class Player:
         return model.character if self.flip(self.model.fermi_probability(pi_model, pi_self)) else self.character
 
     def compute_pi(self):
-        """π do ewolucji - jedno miejsce (Moduł 3 doda fitness_mode "inclusive")."""
-        return self.window_payoff / self.window_games if self.window_games else 0.0
+        """π do ewolucji - jedno miejsce.
+        "own": średnia własna wypłata na grę.
+        "inclusive" (Moduł 3, DO DECYZJI):
+          "add":   π_own + r · Σ(skutek moich ruchów dla krewnych) / gry
+          "strip": π_own + r · (Σ skutek moich ruchów dla krewnych - Σ skutek ruchów krewnych dla mnie) / gry
+        skutek = wypłata partnera przy moim ruchu minus jego wypłata, gdybym zagrał D (gra dawcy: C -> b)."""
+        if not self.window_games:
+            return 0.0
+        own = self.window_payoff / self.window_games
+        P = self.model.p
+        if P.kin_on and P.fitness_mode == "inclusive":
+            kin_term = self.window_kin_given
+            if P.inclusive_variant == "strip":
+                kin_term -= self.window_kin_received
+            return own + P.family_r * kin_term / self.window_games
+        return own
 
     def change_character(self, new_char):
         if new_char == self.character:
@@ -1064,7 +1182,11 @@ class Player:
 
     def reflex_do_you_wanna_play(self):
         m, P = self.model, self.model.p
-        if P.well_mixed:
+        if P.well_mixed and P.kin_on and P.kin_matching_prob > 0 and self.flip(P.kin_matching_prob):
+            nearby = self.relatives()              # α: partner spośród krewnych
+            if not nearby:
+                nearby = [q for q in m.players if q is not self]
+        elif P.well_mixed:
             nearby = [q for q in m.players if q is not self]
         else:
             nearby = m.players_within(self, P.vision_radius)
@@ -1077,7 +1199,9 @@ class Player:
             if key not in m.active_pairs:
                 loc = ((self.location[0] + enemy.location[0]) / 2,
                        (self.location[1] + enemy.location[1]) / 2)
-                m.active_pairs[key] = m.create_game(self, enemy, key, loc)
+                g = m.create_game(self, enemy, key, loc)
+                if P.pair_cooldown > 0:
+                    m.active_pairs[key] = g
 
     def step(self):
         P = self.model.p
@@ -1139,6 +1263,12 @@ class Model:
         self.ablation_rows = []       # ablation_results.csv
         self.fingerprint_rows = []    # regression_fingerprint.csv
         self.perf_rows = []           # perf.csv
+        self.family_rows = []         # family_timeseries.csv
+        self.families = []            # Moduł 3: listy graczy wg family_id
+        self.kin_stats = KinStats()   # cały przebieg
+        self.kin_window_stats = KinStats()
+        self.kin_first_window = None
+        self.kin_last_window = None
         self.timeseries_rows = []     # character_timeseries.csv
         self.compat_rows = []         # compat_results.csv
 
@@ -1176,13 +1306,27 @@ class Model:
         self.apply_payoff_preset()
         if P.compat_core:
             self.apply_compat_core()
+        self.warnings = []
+        if P.payoff_mode not in ("classic", "donation"):
+            raise ModelError("payoff_mode musi być classic albo donation: %s" % P.payoff_mode)
+        if P.payoff_mode == "donation":
+            if not (P.b > P.c > 0):
+                raise ModelError("Gra dawcy wymaga b > c > 0 (b=%s, c=%s)." % (P.b, P.c))
+            if not P.unlimited_games:
+                raise ModelError("Gra dawcy wymaga unlimited_games = true (wypłaty ujemne i ułamkowe).")
+            P.game_type = "PD"
+            P.payoff_T, P.payoff_R, P.payoff_P, P.payoff_S = P.b, P.b - P.c, 0.0, -P.c
+            self.warnings.append("Gra dawcy: T=%s R=%s P=0 S=%s (T, R, P, S z GUI zignorowane)."
+                                 % (P.payoff_T, P.payoff_R, P.payoff_S))
+        if P.kin_on and not P.evolution_on:
+            raise ModelError("Moduł 3 (kin_on) wymaga evolution_on = true - bez ewolucji pokrewieństwo "
+                             "nie wpływa na nic.")
         if not self.payoffs_valid():
             raise ModelError("Macierz wypłat niezgodna z game_type=%s (PD: T>R>P>S, weak_PD: T>R>P=S, "
                              "snowdrift: T>R>S>P). Aktualnie : T=%s R=%s P=%s S=%s"
                              % (P.game_type, P.payoff_T, P.payoff_R, P.payoff_P, P.payoff_S))
         if not P.unlimited_games and not self.payoffs_integer():
             raise ModelError("Tryb z ograniczeniem gier (unlimited_games=false) wymaga całkowitych wypłat.")
-        self.warnings = []
         if P.game_type == "PD" and not (2 * P.payoff_R > P.payoff_T + P.payoff_S):
             self.warnings.append("OSTRZEŻENIE: 2R <= T+S (%s <= %s) - naprzemienna eksploatacja nie jest "
                                  "gorsza niż stała kooperacja." % (2 * P.payoff_R, P.payoff_T + P.payoff_S))
@@ -1196,6 +1340,38 @@ class Model:
             pl.apply_character_params()
             if P.real_env:
                 pl.init_on_network()
+        if P.kin_on:
+            self._setup_families()
+
+    def _setup_families(self):
+        """Rodziny: losowy podział na grupy family_size; korelacja strategii i skupienie przestrzenne."""
+        P = self.p
+        perm = list(self.players)
+        self.rng.shuffle(perm)
+        fs = max(1, int(P.family_size))
+        for k in range(0, len(perm), fs):
+            fam = perm[k:k + fs]
+            fid = len(self.families)
+            self.families.append(fam)
+            for p in fam:
+                p.family_id = fid
+            if P.kin_strategy_correlation > 0:
+                fam_char = self.rng.choice(fam).character
+                for p in fam:
+                    if self.rng.random() < P.kin_strategy_correlation and p.character != fam_char:
+                        p.character = fam_char
+                        p.apply_character_params()
+            if P.kin_spatial_clustering > 0 and P.real_env and not P.well_mixed and fam[0].current_node is not None:
+                anchor = fam[0].current_node
+                for p in fam[1:]:
+                    if self.rng.random() < P.kin_spatial_clustering:
+                        p.current_node = anchor
+                        p.location = self.network.vertices[anchor]
+
+    def payoff_of(self, my_move, opp_move):
+        P = self.p
+        return {("C", "C"): P.payoff_R, ("D", "D"): P.payoff_P, ("D", "C"): P.payoff_T,
+                ("C", "D"): P.payoff_S}.get((my_move, opp_move), 0.0)
 
     def create_player(self, character=None, **attrs):
         pl = Player(self, "player%d" % len(self.players), character, **attrs)
@@ -1359,7 +1535,11 @@ class Model:
         P.character_strength_qlearn = 0.0
         P.unlimited_games = True
         P.classic_start_cooperate = True
-        if P.compat_mix == "tft_alld":
+        if P.compat_mix == "allc_alld":          # Moduł 3 / P4: bez wzajemności
+            P.nb_ALLC = P.compat_N - P.compat_N // 2
+            P.nb_ALLD = P.compat_N // 2
+            P.nb_TFT = P.nb_FTFT = P.nb_TF2T = P.nb_GRIM = P.nb_WSLS = 0
+        elif P.compat_mix == "tft_alld":
             P.nb_ALLD = int(round(P.compat_N * 0.2))
             P.nb_TFT = P.compat_N - P.nb_ALLD
             P.nb_ALLC = P.nb_FTFT = P.nb_TF2T = P.nb_GRIM = P.nb_WSLS = 0
@@ -1439,7 +1619,22 @@ class Model:
             + ([P.network_variant] + [self.net_stats[k] for k in NET_STAT_KEYS]
                if (self.net_stats and not P.well_mixed) else ["n/a"] * (1 + len(NET_STAT_KEYS)))
             + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct]
-            + ["n/a" if (P.well_mixed or not P.real_env) else self.network.edges_removed])
+            + ["n/a" if (P.well_mixed or not P.real_env) else self.network.edges_removed]
+            + self._kin_columns())
+
+    def _kin_columns(self):
+        P = self.p
+        cols = [P.payoff_mode, P.b, P.c, P.c / P.b if P.b else "n/a", P.kin_on]
+        if not P.kin_on:
+            return cols + ["n/a"] * (len(KIN_HEADER) - 5)
+        na = lambda v: "n/a" if v is None else v
+        s = self.kin_stats.summary()
+        fw = self.kin_first_window or {}
+        lw = self.kin_last_window or {}
+        return cols + [P.family_size, P.family_r, P.kin_spatial_clustering, P.kin_strategy_correlation,
+                       P.kin_imitation_bias, P.kin_matching_prob, P.fitness_mode, P.inclusive_variant,
+                       na(s["r_hat_all"]), na(s["r_hat_kin"]), na(fw.get("r_hat_all")), na(lw.get("r_hat_all")),
+                       na(s["kin_share"]), na(s["coop_kin"]), na(s["coop_str"])]
 
     # --- zdarzenie po grze i metryka stabilności spotkań ----------------------
     def on_game_played(self, g):
@@ -1489,6 +1684,7 @@ class Model:
         for p in self.players:
             p.window_payoff = 0.0
             p.window_games = 0
+            p.window_kin_given = p.window_kin_received = 0.0
 
     def _reflex_export_timeseries(self):
         d_c, d_d = self.nb_moves_C - self.ts_prev_C, self.nb_moves_D - self.ts_prev_D
@@ -1558,6 +1754,18 @@ class Model:
             self._reflex_close_encounter_window()
         if P.encounter_export and self.cycle == P.end_cycle:
             self._reflex_export_encounter_cells()
+        if P.kin_on and self.cycle > 0 and self.cycle % P.kin_window == 0:
+            summ = self.kin_window_stats.summary()
+            if self.kin_first_window is None:
+                self.kin_first_window = summ
+            self.kin_last_window = summ
+            self.kin_window_stats = KinStats()
+        if P.kin_on and P.kin_export and self.cycle % P.sample_interval == 0:
+            for fam in self.families:
+                n = len(fam)
+                self.family_rows.append([P.variant_name, self.seed, self.cycle, fam[0].family_id, n,
+                                         sum(p.character == "ALLC" for p in fam) / n,
+                                         sum(p.character == "ALLD" for p in fam) / n])
         if P.compat_export and self.cycle > 0 and self.cycle % P.sample_interval == 0:
             self._reflex_track_stability()
         if P.compat_export and self.cycle == P.end_cycle:
@@ -1649,6 +1857,11 @@ class Model:
 
 TIMESERIES_CHARACTERS = ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS", "QLEARN", "AQLEARN"]
 
+KIN_HEADER = ["payoff_mode", "b", "c", "c_over_b", "kin_on", "family_size", "family_r", "kin_spatial_clustering",
+              "kin_strategy_correlation", "kin_imitation_bias", "kin_matching_prob", "fitness_mode",
+              "inclusive_variant", "r_hat_all", "r_hat_kin", "r_hat_first_window", "r_hat_last_window",
+              "kin_interaction_share", "coop_with_kin", "coop_with_strangers"]
+
 NET_STAT_KEYS = ["net_nodes", "net_edges", "net_mean_degree", "net_avg_path", "net_density",
                  "net_betw_max", "net_betw_mean"]
 
@@ -1659,9 +1872,10 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
                  "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "alld_trend_10k",
                  "nb_character_changes", "network_variant"] + NET_STAT_KEYS + [
-                 "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"]
+                 "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"] + KIN_HEADER
 
 CSV_HEADERS = {
+    "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
     "encounter_cells.csv": ["variant_name", "seed", "network_variant", "col", "row", "total_games",
                             "share_repeat_remembered", "share_repeat_ever", "last_window_share_remembered",
                             "last_window_share_ever"],
@@ -1829,7 +2043,7 @@ class BatchRun:
         self.jobs = [(dict(dict(base, **c), **(overrides or {})), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
-        self.compat_rows, self.encounter_rows = [], []
+        self.compat_rows, self.encounter_rows, self.family_rows = [], [], []
         self.done = 0
         self.current = None
 
@@ -1863,6 +2077,7 @@ class BatchRun:
                 self.timeseries_rows += m.timeseries_rows
                 self.compat_rows += m.compat_rows
                 self.encounter_rows += m.encounter_rows
+                self.family_rows += m.family_rows
                 self.done += 1
                 self.current = None
         return self.done >= len(self.jobs)
@@ -1876,7 +2091,8 @@ class BatchRun:
 # plik CSV -> atrybut z wierszami (BatchRun i Model)
 BATCH_OUTPUTS = [("ablation_results.csv", "ablation_rows"), ("regression_fingerprint.csv", "fingerprint_rows"),
                  ("perf.csv", "perf_rows"), ("character_timeseries.csv", "timeseries_rows"),
-                 ("compat_results.csv", "compat_rows"), ("encounter_cells.csv", "encounter_rows")]
+                 ("compat_results.csv", "compat_rows"), ("encounter_cells.csv", "encounter_rows"),
+                 ("family_timeseries.csv", "family_rows")]
 
 
 def batch_outputs(b):
@@ -2513,6 +2729,116 @@ def t_parallel_batch_matches_sequential():
     par2 = run_batch_parallel("PM4_heatmap", workers=2, repeat=1, end_cycle=150)
     for _, attr in BATCH_OUTPUTS:
         assert getattr(par2, attr) == getattr(seq2, attr), attr
+
+
+def _kin_model(**kw):
+    base = dict(compat_core=True, compat_mix="allc_alld", compat_N=200, well_mixed=True, evolution_on=True,
+                evolution_interval=10 ** 9, payoff_mode="donation", b=1.0, c=0.3, kin_on=True, family_size=10,
+                log_games=False)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def t_kin_off_regression():
+    # kin_on = false: parametry modułu 3 nic nie zmieniają (te same losowania, te same wyniki)
+    p = dict(nb_TFT=6, nb_ALLD=6, nb_ALLC=6, unlimited_games=True, vision_radius=40, log_games=False,
+             evolution_on=True, mutation_rate=0.05, evolution_interval=50)
+    a = Model(Params(**p), seed=3).run(400)
+    b = Model(Params(**p, family_size=3, family_r=0.9, kin_matching_prob=0.7, kin_imitation_bias=0.5,
+                     kin_strategy_correlation=1.0, fitness_mode="inclusive"), seed=3).run(400)
+    assert (a.nb_game, a.nb_moves_D, [q.character for q in a.players], [q.score for q in a.players]) == \
+           (b.nb_game, b.nb_moves_D, [q.character for q in b.players], [q.score for q in b.players])
+
+
+def t_donation_matrix():
+    m = _kin_model(b=2.0, c=0.5)
+    assert (m.p.payoff_T, m.p.payoff_R, m.p.payoff_P, m.p.payoff_S) == (2.0, 1.5, 0.0, -0.5)
+    assert any("Gra dawcy" in w for w in m.warnings)
+    for b, c in ((1.0, 1.0), (1.0, 1.5), (1.0, 0.0)):
+        try:
+            _kin_model(b=b, c=c)
+            assert False, (b, c)
+        except ModelError:
+            pass
+
+
+def t_kin_requires_evolution():
+    try:
+        _kin_model(evolution_on=False)
+        assert False
+    except ModelError as e:
+        assert "evolution_on" in str(e)
+
+
+def t_family_id_stable():
+    m = _kin_model(kin_strategy_correlation=1.0)
+    p = m.players[0]
+    fid = p.family_id
+    assert fid >= 0 and all(len(f) == 10 for f in m.families)
+    p.change_character("ALLD" if p.character == "ALLC" else "ALLC")
+    assert p.family_id == fid and p in m.families[fid]
+
+
+def t_kin_matching_shares():
+    # α = 1: każda gra inicjowana z krewnym; α = 0: udział krewnych ≈ (fs - 1) / (N - 1)
+    one = _kin_model(kin_matching_prob=1.0).run(300)
+    assert one.kin_stats.summary()["kin_share"] > 0.99
+    zero = _kin_model(kin_matching_prob=0.0).run(300)
+    assert abs(zero.kin_stats.summary()["kin_share"] - 9 / 199) < 0.02
+
+
+def t_r_hat_matches_alpha():
+    # rodziny jednorodne (korelacja 1), ALLC/ALLD, bez zmian strategii, bez blokady rewanżu: r̂ ≈ α
+    for alpha in (0.0, 0.3, 0.6, 0.9):
+        m = _kin_model(kin_matching_prob=alpha, kin_strategy_correlation=1.0, pair_cooldown=0).run(400)
+        r = m.kin_stats.summary()["r_hat_all"]
+        assert abs(r - alpha) < 0.03, (alpha, r)
+
+
+def t_pair_cooldown_suppresses_kin_games():
+    # blokada rewanżu (10 cykli) tłumi gry z krewnymi (tylko 9 krewnych) -> r̂ < α; stąd pair_cooldown = 0 w P4
+    blocked = _kin_model(kin_matching_prob=0.6, kin_strategy_correlation=1.0).run(300)
+    assert blocked.kin_stats.summary()["kin_share"] < 0.5
+    assert blocked.kin_stats.summary()["r_hat_all"] < 0.5
+
+
+def t_r_hat_known_values():
+    s = KinStats()
+    for x, y in ((1, 1), (1, 0), (0, 0), (0, 0)):          # nachylenie = 0,5
+        KinStats._add(s.all, x, y)
+    assert abs(KinStats.r_hat(s.all) - 0.5) < 1e-12
+    s2 = KinStats()
+    for m1, m2 in (("C", "C"), ("D", "D"), ("C", "C"), ("D", "D")):   # pełna korelacja
+        s2.record(m1, m2, kin=True)
+    assert abs(KinStats.r_hat(s2.all) - 1.0) < 1e-12 and s2.summary()["kin_share"] == 1.0
+    assert KinStats.r_hat(KinStats().all) is None
+
+
+def t_inclusive_equals_own_at_r0():
+    for variant in ("add", "strip"):
+        m = _kin_model(fitness_mode="inclusive", inclusive_variant=variant, family_r=0.0, kin_matching_prob=0.5).run(200)
+        for p in m.players[:30]:
+            m.p.fitness_mode = "own"
+            own = p.compute_pi()
+            m.p.fitness_mode = "inclusive"
+            assert abs(p.compute_pi() - own) < 1e-12
+
+
+def t_inclusive_components():
+    # gra dawcy b=1, c=0.3: krewny ALLC daje partnerowi +1 (skutek), ALLD daje 0
+    m = _kin_model(fitness_mode="inclusive", family_r=0.5)
+    fam = next(f for f in m.families if len(f) >= 2)
+    a, b = fam[0], fam[1]
+    a.character, b.character = "ALLC", "ALLD"
+    for p in (a, b):
+        p.window_payoff = p.window_games = 0
+        p.window_kin_given = p.window_kin_received = 0.0
+    _game(m, a, b, "k1")
+    assert (a.window_kin_given, a.window_kin_received) == (1.0, 0.0)
+    assert (b.window_kin_given, b.window_kin_received) == (0.0, 1.0)
+    assert abs(a.compute_pi() - (-0.3 + 0.5 * 1.0)) < 1e-12           # add
+    m.p.inclusive_variant = "strip"
+    assert abs(b.compute_pi() - (1.0 + 0.5 * (0.0 - 1.0))) < 1e-12     # strip
 
 
 def t_smoke_full_run():

@@ -182,10 +182,133 @@ global {
 		ask player {
 			window_payoff <- 0.0;
 			window_games <- 0;
+			window_kin_given <- 0.0;
+			window_kin_received <- 0.0;
 		}
 	}
 
-	// --- Moduł 3 (Hamilton): bonus po planie minimalnym, specyfikacja w CLAUDE.md ---
+	// --- Moduł 3: pokrewieństwo (reguła Hamiltona); wymaga evolution_on ---
+	string payoff_mode <- "classic";       // "classic" | "donation" (R = b-c, S = -c, T = b, P = 0)
+	float b <- 1.0;
+	float c <- 0.3;
+	bool kin_on <- false;
+	int family_size <- 10;
+	float family_r <- 0.5;                 // nominalne r w rodzinie (fitness_mode "inclusive")
+	float kin_spatial_clustering <- 0.0;   // 0 = losowe położenia, 1 = rodzina startuje w jednym węźle
+	float kin_strategy_correlation <- 0.0; // P(członek dostaje strategię rodziny przy starcie)
+	float kin_imitation_bias <- 0.0;       // P(model do imitacji spośród krewnych)
+	float kin_matching_prob <- 0.0;        // α: P(partner spośród krewnych), tylko well_mixed
+	string fitness_mode <- "own";          // "own" | "inclusive"
+	string inclusive_variant <- "add";     // DO DECYZJI: "add" | "strip"
+	bool kin_reward_learners <- false;     // QLEARN/AQLEARN: nagroda + r * wypłata krewnego (nie włączać bez zgody)
+	int kin_window <- 1000;                // okno r̂ (cykle)
+	bool kin_export <- false;              // family_timeseries.csv
+	int pair_cooldown <- 10;               // ile cykli para nie może zagrać ponownie (dotąd stałe 10); 0 = bez blokady
+	list<list<player>> families <- [];
+	// sumy do r̂: n, Σx, Σy, Σxy, Σx² (x = mój ruch, y = ruch partnera, C = 1); cały przebieg i bieżące okno
+	list<float> kin_all <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	list<float> kin_kin <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	list<float> kin_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	int kin_games_total <- 0;
+	int kin_games_kin <- 0;
+	int kin_coop_kin <- 0;
+	int kin_moves_kin <- 0;
+	int kin_coop_str <- 0;
+	int kin_moves_str <- 0;
+	float r_hat_first_window <- -999.0;    // -999 = nieokreślone ("n/a" w CSV)
+	float r_hat_last_window <- -999.0;
+
+	// komunikat błędu konfiguracji modułu 3 ("" = poprawna)
+	string kin_config_error() {
+		if !(payoff_mode in ["classic", "donation"]) { return "payoff_mode musi być classic albo donation."; }
+		if payoff_mode = "donation" and !(b > c and c > 0) { return "Gra dawcy wymaga b > c > 0."; }
+		if payoff_mode = "donation" and !unlimited_games { return "Gra dawcy wymaga unlimited_games = true."; }
+		if kin_on and !evolution_on { return "Moduł 3 (kin_on) wymaga evolution_on = true - bez ewolucji pokrewieństwo nie wpływa na nic."; }
+		return "";
+	}
+
+	float payoff_of(string my_move, string opp_move) {
+		if my_move = "C" and opp_move = "C" { return payoff_R; }
+		if my_move = "D" and opp_move = "D" { return payoff_P; }
+		if my_move = "D" and opp_move = "C" { return payoff_T; }
+		if my_move = "C" and opp_move = "D" { return payoff_S; }
+		return 0.0;
+	}
+
+	// nachylenie regresji y na x z sum; -999, gdy x nie ma zmienności
+	float r_hat(list<float> s) {
+		float den <- s[0] * s[4] - s[1] * s[1];
+		return (s[0] < 2 or den = 0) ? -999.0 : (s[0] * s[3] - s[1] * s[2]) / den;
+	}
+
+	action add_pair(list<float> s, float x, float y) {
+		s[0] <- s[0] + 1; s[1] <- s[1] + x; s[2] <- s[2] + y; s[3] <- s[3] + x * y; s[4] <- s[4] + x * x;
+	}
+
+	action record_kin(string m1, string m2, bool kin) {
+		float x1 <- m1 = "C" ? 1.0 : 0.0;
+		float x2 <- m2 = "C" ? 1.0 : 0.0;
+		kin_games_total <- kin_games_total + 1;
+		loop pr over: [[x1, x2], [x2, x1]] {
+			do add_pair(kin_all, pr[0], pr[1]);
+			do add_pair(kin_win, pr[0], pr[1]);
+			if kin { do add_pair(kin_kin, pr[0], pr[1]); }
+		}
+		if kin {
+			kin_games_kin <- kin_games_kin + 1;
+			kin_coop_kin <- kin_coop_kin + int(x1 + x2);
+			kin_moves_kin <- kin_moves_kin + 2;
+		} else {
+			kin_coop_str <- kin_coop_str + int(x1 + x2);
+			kin_moves_str <- kin_moves_str + 2;
+		}
+	}
+
+	// rodziny: losowy podział na grupy family_size; korelacja strategii; skupienie przestrzenne
+	action setup_families() {
+		list<player> perm <- shuffle(list(player));
+		int fs <- max(1, family_size);
+		int k <- 0;
+		loop while: k < length(perm) {
+			list<player> fam <- copy_between(perm, k, min(k + fs, length(perm)));
+			int fid <- length(families);
+			families <+ fam;
+			ask fam { family_id <- fid; }
+			if kin_strategy_correlation > 0 {
+				string fam_char <- one_of(fam).character;
+				loop p over: fam {
+					if flip(kin_strategy_correlation) and p.character != fam_char {
+						ask p { character <- fam_char; do apply_character_params(); }
+					}
+				}
+			}
+			if kin_spatial_clustering > 0 and real_env and !well_mixed and first(fam).current_node != nil {
+				point anchor <- first(fam).current_node;
+				loop p over: fam - first(fam) {
+					if flip(kin_spatial_clustering) {
+						ask p { current_node <- anchor; location <- anchor; }
+					}
+				}
+			}
+			k <- k + fs;
+		}
+	}
+
+	reflex close_kin_window when: kin_on and cycle > 0 and every(kin_window) {
+		float r <- r_hat(kin_win);
+		if r_hat_first_window = -999.0 { r_hat_first_window <- r; }
+		r_hat_last_window <- r;
+		kin_win <- [0.0, 0.0, 0.0, 0.0, 0.0];
+	}
+
+	reflex export_families when: kin_on and kin_export and every(sample_interval) {
+		loop fam over: families {
+			int n <- length(fam);
+			save [variant_name, seed, cycle, first(fam).family_id, n,
+				length(fam where (each.character = "ALLC")) / n, length(fam where (each.character = "ALLD")) / n]
+				to: "../results/family_timeseries.csv" rewrite: false format: "csv" header: true;
+		}
+	}
 
 	// --- Warstwa projektowa: warianty układu sieci ---
 	string network_variant <- "baseline";   // "baseline" = sieć z pliku; "fragmented"; "connected"
@@ -399,7 +522,11 @@ global {
 		character_strength_qlearn <- 0.0;
 		unlimited_games <- true;
 		classic_start_cooperate <- true;
-		if compat_mix = "tft_alld" {
+		if compat_mix = "allc_alld" {           // Moduł 3 / P4: bez wzajemności
+			nb_ALLD <- compat_N div 2;
+			nb_ALLC <- compat_N - nb_ALLD;
+			nb_TFT <- 0; nb_FTFT <- 0; nb_TF2T <- 0; nb_GRIM <- 0; nb_WSLS <- 0;
+		} else if compat_mix = "tft_alld" {
 			nb_ALLD <- round(compat_N * 0.2);
 			nb_TFT <- compat_N - nb_ALLD;
 			nb_ALLC <- 0; nb_FTFT <- 0; nb_TF2T <- 0; nb_GRIM <- 0; nb_WSLS <- 0;
@@ -509,7 +636,19 @@ global {
 			well_mixed ? "n/a" : string(net_density), well_mixed ? "n/a" : string(net_betw_max),
 			well_mixed ? "n/a" : string(net_betw_mean),
 			enc_share_remembered, enc_share_ever, enc_distinct,
-			well_mixed ? "n/a" : string(net_edges_removed)]
+			well_mixed ? "n/a" : string(net_edges_removed),
+			payoff_mode, b, c, c / b, kin_on,
+			kin_on ? string(family_size) : "n/a", kin_on ? string(family_r) : "n/a",
+			kin_on ? string(kin_spatial_clustering) : "n/a", kin_on ? string(kin_strategy_correlation) : "n/a",
+			kin_on ? string(kin_imitation_bias) : "n/a", kin_on ? string(kin_matching_prob) : "n/a",
+			kin_on ? fitness_mode : "n/a", kin_on ? inclusive_variant : "n/a",
+			kin_on and r_hat(kin_all) != -999.0 ? string(r_hat(kin_all)) : "n/a",
+			kin_on and r_hat(kin_kin) != -999.0 ? string(r_hat(kin_kin)) : "n/a",
+			kin_on and r_hat_first_window != -999.0 ? string(r_hat_first_window) : "n/a",
+			kin_on and r_hat_last_window != -999.0 ? string(r_hat_last_window) : "n/a",
+			kin_on and kin_games_total > 0 ? string(kin_games_kin / kin_games_total) : "n/a",
+			kin_on and kin_moves_kin > 0 ? string(kin_coop_kin / kin_moves_kin) : "n/a",
+			kin_on and kin_moves_str > 0 ? string(kin_coop_str / kin_moves_str) : "n/a"]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -707,6 +846,12 @@ global {
 	init {
 		do apply_payoff_preset();
 		if compat_core { do apply_compat_core(); }
+		if kin_config_error() != "" { error kin_config_error(); }
+		if payoff_mode = "donation" {
+			game_type <- "PD";
+			payoff_T <- b; payoff_R <- b - c; payoff_P <- 0.0; payoff_S <- -c;
+			write "Gra dawcy: T=" + payoff_T + " R=" + payoff_R + " P=0 S=" + payoff_S + " (T, R, P, S z GUI zignorowane).";
+		}
 		if not payoffs_valid() {
 			error "Macierz wypłat niezgodna z game_type=" + game_type
 				+ " (PD: T>R>P>S, weak_PD: T>R>P=S, snowdrift: T>R>S>P).
@@ -758,6 +903,7 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 				}
 			}
 		}
+		if kin_on { do setup_families(); }
 	}
 }
 
@@ -853,7 +999,7 @@ species game{
 	player p2;
 	string p1_move;
 	string p2_move;
-	int lifespan <- 10;
+	int lifespan <- pair_cooldown;          // dotąd stałe 10
 	bool knew1_rem;          // przed grą: p1 pamięta p2 (known_others)
 	bool knew1_ever;         // przed grą: p1 spotkał p2 kiedykolwiek
 	bool knew2_rem;
@@ -957,6 +1103,27 @@ species game{
 		p2.window_payoff <- p2.window_payoff + p2_payoff;
 		p2.window_games <- p2.window_games + 1;
 
+		// Moduł 3: skutek mojego ruchu dla krewnego = jego wypłata minus jego wypłata, gdybym zagrał D
+		bool kin <- kin_on and p1.family_id >= 0 and p1.family_id = p2.family_id;
+		if kin_on and (p1_move in ["C", "D"]) and (p2_move in ["C", "D"]) {
+			ask world { do record_kin(myself.p1_move, myself.p2_move, kin); }
+			if kin {
+				float d12 <- world.payoff_of(p2_move, p1_move) - world.payoff_of(p2_move, "D");
+				float d21 <- world.payoff_of(p1_move, p2_move) - world.payoff_of(p1_move, "D");
+				p1.window_kin_given <- p1.window_kin_given + d12;
+				p2.window_kin_received <- p2.window_kin_received + d12;
+				p2.window_kin_given <- p2.window_kin_given + d21;
+				p1.window_kin_received <- p1.window_kin_received + d21;
+			}
+		}
+		// preferencja, nie selekcja - nie w teście Hamiltona
+		if kin and kin_reward_learners {
+			float r1 <- p1_payoff + family_r * p2_payoff;
+			float r2 <- p2_payoff + family_r * p1_payoff;
+			p1_payoff <- r1;
+			p2_payoff <- r2;
+		}
+
 		if p1.character = "QLEARN" or p1.character = "AQLEARN"{
 			float payoff_of_p1 <- p1_payoff;
 			ask p1 {
@@ -989,7 +1156,7 @@ species game{
 
 	reflex die{
 		lifespan <- lifespan - 1;
-		if lifespan = 0{
+		if lifespan <= 0{
 			remove key: pair_key from: world.active_pairs;
 			do die();
 		}
@@ -1010,6 +1177,9 @@ species player skills: [moving] {
 	int nb_forgotten <- 0;
 	float window_payoff <- 0.0;              // Moduł 2: suma wypłat w bieżącym oknie
 	int window_games <- 0;
+	int family_id <- -1;                     // Moduł 3: stały przez cały przebieg
+	float window_kin_given <- 0.0;           // Σ skutków moich ruchów dla krewnych w oknie
+	float window_kin_received <- 0.0;        // Σ skutków ruchów krewnych dla mnie w oknie
 	map<player, int> history_offset;         // Moduł 2: GRIM liczy historię od tego miejsca (przejęcie charakteru)
 	// stabilność spotkań (metryka, nie pamięć strategii - zapominanie jej nie rusza)
 	map<player, int> met_count;              // liczba gier z każdym partnerem od początku przebiegu
@@ -1054,7 +1224,15 @@ species player skills: [moving] {
 	}
 
 	// Moduł 2: model do imitacji - losowy sąsiad w zasięgu widzenia (well_mixed: losowy agent populacji)
+	list<player> relatives() {
+		return family_id < 0 ? [] : (families[family_id] - self);
+	}
+
 	player pick_model() {
+		if kin_on and kin_imitation_bias > 0 and flip(kin_imitation_bias) {
+			list<player> rel <- relatives();     // krewni niezależnie od odległości
+			if !empty(rel) { return one_of(rel); }
+		}
 		list<player> pool <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
 		return empty(pool) ? nil : one_of(pool);
 	}
@@ -1070,9 +1248,17 @@ species player skills: [moving] {
 		return flip(world.fermi_probability(pi_model, pi_self)) ? model.character : character;
 	}
 
-	// π do ewolucji - jedno miejsce (Moduł 3 doda fitness_mode "inclusive")
+	// π do ewolucji - jedno miejsce. "own": średnia własna wypłata na grę.
+	// "inclusive" (DO DECYZJI): "add" = π_own + r * Σ skutków moich ruchów dla krewnych / gry;
+	// "strip" = π_own + r * (Σ skutków dla krewnych - Σ skutków ruchów krewnych dla mnie) / gry
 	float compute_pi() {
-		return window_games = 0 ? 0.0 : window_payoff / window_games;
+		if window_games = 0 { return 0.0; }
+		float own <- window_payoff / window_games;
+		if kin_on and fitness_mode = "inclusive" {
+			float kin_term <- window_kin_given - (inclusive_variant = "strip" ? window_kin_received : 0.0);
+			return own + family_r * kin_term / window_games;
+		}
+		return own;
 	}
 
 	// zmiana charakteru: pamięć partnerów zostaje, GRIM zaczyna liczyć zdrady od teraz
@@ -1501,6 +1687,11 @@ species player skills: [moving] {
 	action try_play() {
 		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
 		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
+		// Moduł 3: w well_mixed z prawdopodobieństwem α partner spośród krewnych
+		if well_mixed and kin_on and kin_matching_prob > 0 and flip(kin_matching_prob) {
+			list<player> rel <- relatives();
+			if !empty(rel) { nearby <- rel; }
+		}
 		if !empty(nearby) {
 			enemy <- one_of(nearby);
 
@@ -1517,7 +1708,7 @@ species player skills: [moving] {
 
 					create game(p1:a,p2:b,location:(pn1 + pn2) / 2, pair_key:key) returns: new_games;
 
-					world.active_pairs[key] <- first(new_games);
+					if pair_cooldown > 0 { world.active_pairs[key] <- first(new_games); }
 				}
 			}
 		}
@@ -1616,6 +1807,19 @@ experiment PD type: gui {
 	parameter "Liczba skrótów (connected)" var: shortcut_count min: 0 category: "Warstwa projektowa";
 	parameter "Maks. długość skrótu (m)" var: shortcut_max_length min: 0.0 category: "Warstwa projektowa";
 	parameter "Okno metryki spotkań (cykle)" var: encounter_window min: 1 category: "Stabilność spotkań";
+	parameter "Rodziny (wymaga ewolucji)" var: kin_on category: "Moduł 3 – pokrewieństwo";
+	parameter "Tryb wypłat" var: payoff_mode among: ["classic", "donation"] category: "Moduł 3 – pokrewieństwo";
+	parameter "b (korzyść)" var: b category: "Moduł 3 – pokrewieństwo";
+	parameter "c (koszt)" var: c category: "Moduł 3 – pokrewieństwo";
+	parameter "Wielkość rodziny" var: family_size min: 1 category: "Moduł 3 – pokrewieństwo";
+	parameter "r w rodzinie" var: family_r min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "Skupienie przestrzenne rodzin" var: kin_spatial_clustering min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "Korelacja strategii w rodzinie" var: kin_strategy_correlation min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "Imitacja krewnych" var: kin_imitation_bias min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "α: dobór krewnych (well_mixed)" var: kin_matching_prob min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "Dopasowanie" var: fitness_mode among: ["own", "inclusive"] category: "Moduł 3 – pokrewieństwo";
+	parameter "Wariant inclusive" var: inclusive_variant among: ["add", "strip"] category: "Moduł 3 – pokrewieństwo";
+	parameter "Blokada rewanżu (cykle)" var: pair_cooldown min: 0 category: "Moduł 3 – pokrewieństwo";
 	parameter "Eksport szeregów czasowych" var: timeseries_export category: "Diagnostyka";
 	parameter "Co ile cykli próbka" var: sample_interval min: 1 category: "Diagnostyka";
 
@@ -2840,5 +3044,84 @@ experiment test_hooks_preserve_behaviour type: test {
         ask first(me) { do init_beliefs_for(first(other)); }
         assert first(me).lists_per_other[first(other)] = [];
         assert empty(first(me).q_c_per_other[first(other)]);
+    }
+}
+
+experiment test_module3_config type: test {
+    test "gra dawcy: poprawna macierz i odrzucenie b <= c; kin_on bez ewolucji zablokowane" {
+        unlimited_games <- true;
+        evolution_on <- true;
+        payoff_mode <- "donation";
+        b <- 1.0; c <- 1.0;
+        assert world.kin_config_error() != "";
+        b <- 1.0; c <- 0.0;
+        assert world.kin_config_error() != "";
+        b <- 2.0; c <- 0.5;
+        assert world.kin_config_error() = "";
+        kin_on <- true;
+        evolution_on <- false;
+        assert world.kin_config_error() contains "evolution_on";
+    }
+
+    test "r̂ z sum: znane wartości" {
+        list<float> s <- [0.0, 0.0, 0.0, 0.0, 0.0];
+        ask world {
+            do add_pair(s, 1.0, 1.0); do add_pair(s, 1.0, 0.0); do add_pair(s, 0.0, 0.0); do add_pair(s, 0.0, 0.0);
+        }
+        assert abs(world.r_hat(s) - 0.5) < 0.000001;
+        assert world.r_hat([0.0, 0.0, 0.0, 0.0, 0.0]) = -999.0;
+    }
+}
+
+experiment test_module3_families type: test {
+    test "family_id stałe przy zmianie charakteru; dobór krewnych alfa = 1 i 0; r̂ ≈ alfa" {
+        log_games <- false;
+        unlimited_games <- true;
+        evolution_on <- true;
+        well_mixed <- true;
+        kin_on <- true;
+        family_size <- 10;
+        kin_strategy_correlation <- 1.0;
+        pair_cooldown <- 0;
+        payoff_mode <- "donation";
+        b <- 1.0; c <- 0.3;
+        payoff_T <- 1.0; payoff_R <- 0.7; payoff_P <- 0.0; payoff_S <- -0.3;
+        create player(character: "ALLC") number: 100;
+        create player(character: "ALLD") number: 100;
+        ask world { do setup_families(); }
+        player p <- first(player);
+        int fid <- p.family_id;
+        ask p { do change_character(p.character = "ALLC" ? "ALLD" : "ALLC"); }
+        assert p.family_id = fid;
+
+        kin_matching_prob <- 1.0;
+        loop times: 100 { ask player { do try_play(); } }
+        assert kin_games_kin / kin_games_total > 0.99;
+
+        // α = 0.6: r̂ ≈ 0.6 (rodziny jednorodne, bez blokady rewanżu)
+        kin_all <- [0.0, 0.0, 0.0, 0.0, 0.0];
+        kin_games_total <- 0; kin_games_kin <- 0;
+        ask p { do change_character(p.character = "ALLC" ? "ALLD" : "ALLC"); }   // przywróć strategię rodziny
+        kin_matching_prob <- 0.6;
+        loop times: 200 { ask player { do try_play(); } }
+        assert abs(world.r_hat(kin_all) - 0.6) < 0.05;
+
+        kin_matching_prob <- 0.0;
+        kin_games_total <- 0; kin_games_kin <- 0;
+        loop times: 200 { ask player { do try_play(); } }
+        assert abs(kin_games_kin / kin_games_total - 9 / 199) < 0.02;
+    }
+
+    test "inclusive przy family_r = 0 daje to samo co own" {
+        family_r <- 0.0;
+        loop variant over: ["add", "strip"] {
+            inclusive_variant <- variant;
+            loop q over: player where (each.window_games > 0) {
+                fitness_mode <- "own";
+                float own <- q.compute_pi();
+                fitness_mode <- "inclusive";
+                assert abs(q.compute_pi() - own) < 0.000001;
+            }
+        }
     }
 }
