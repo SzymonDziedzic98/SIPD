@@ -48,6 +48,7 @@ PLAN_MIN = ["PM2_P12_space", "PM2_P12_wellmixed", "PM2_P3_space", "PM2_P3_wellmi
             "PM3_P3_network", "PM4_heatmap"]
 PLAN_MIN_SPEED2 = ["PM2_P3_space_speed2", "PM3_P3_network_speed2", "PM4_heatmap_speed2"]
 PLAN_P4 = ["PM5_P4_strategy", "PM5_P4_family"]
+PAIRS = ["PM7_P1P3_network"]
 FIX = 0.05
 
 
@@ -455,21 +456,29 @@ def ci_diff(a, b):
     return d, d - 1.96 * se, d + 1.96 * se
 
 
+NA_LIMIT = "n/d (limit nie działa)"
+
+
 def verdict_stage2(rows):
-    out = ["## Etap 2 – zestawienia parami (ewolucja + limit Dunbara)", "",
-           "| macierz | mutacja | limit | n | limit działa | ALLD | Δ ALLD vs brak limitu (95% CI) | udział D | ALLC | trend ALLD /10k | stabilizacja | P1 | P2 (część) | P3 |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    pairs = []
-    keyf = lambda r: (r["payoff_preset"], r["mutation_rate"])
+    """Pary P1+P3 (ewolucja + limit Dunbara). P3 dwiema miarami, jak w walidacji pojedynczej:
+    spadek kooperacji (udział D przy limicie większy niż bez limitu; główna) i zysk oszustów
+    (wypłata ALLD na grę większa niż bez limitu; dodatkowa). Istotność: 95% CI różnicy."""
+    out = ["## Zestawienia parami – P1+P3 (ewolucja + limit Dunbara)", "",
+           "| układ | macierz | prędkość | mutacja | limit | n | limit działa | ALLD | udział D | Δ udziału D (95% CI) | "
+           "Δ wypłaty ALLD (95% CI) | ALLC | stabilizacja | P1 | P2 (część) | P3 kooperacja | P3 zysk oszustów |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    pairs, cells = [], {}
+    keyf = lambda r: (layout(r), r["payoff_preset"], r.get("player_speed", 2.0), r["mutation_rate"])
+    sig = lambda lo, hi: "tak" if lo > 0 else ("nie" if hi < 0 else "brak efektu")
     for key, grp in itertools.groupby(sorted(rows, key=keyf), key=keyf):
         g = list(grp)
-        base = [r["share_ALLD"] for r in g if int(r["dunbar_limit"]) == 0]
+        base = [r for r in g if int(r["dunbar_limit"]) == 0]
         for lim in sorted({int(r["dunbar_limit"]) for r in g}):
             gl = [r for r in g if int(r["dunbar_limit"]) == lim]
             n = len(gl)
             ok1 = [FIX < r["share_ALLD"] < 1 - FIX and FIX < r["d_share"] < 1 - FIX and r["stabilized"] for r in gl]
-            v1 = share_verdict(sum(ok1) / n) if key[1] > 0 else "—"
-            if key[1] == 0:
+            v1 = share_verdict(sum(ok1) / n) if key[3] > 0 else "—"
+            if key[3] == 0:
                 v2 = share_verdict(sum(r["share_ALLC"] < 1.0 / r["compat_N"] for r in gl) / n)
                 p2 = "wymiera: " + v2
             else:
@@ -477,35 +486,47 @@ def verdict_stage2(rows):
                 v2 = "tak" if frac >= 0.8 and st.mean(r["share_ALLC"] for r in gl) <= 0.2 else \
                     ("nie" if frac <= 0.2 else "warunkowo")
                 p2 = "utrzymuje się: " + v2
-            if lim == 0:
-                dtxt, v3 = "—", "—"
+            if lim == 0 or len(base) < 2 or n < 2:
+                dtxt = gtxt = vc = ve = "—"
             else:
-                d, lo, hi = ci_diff([r["share_ALLD"] for r in gl], base)
-                dtxt = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi)
-                v3 = "tak" if lo > 0 else ("nie" if hi < 0 else "brak efektu")
+                d, lo, hi = ci_diff([r["d_share"] for r in gl], [r["d_share"] for r in base])
+                dtxt, vc = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi), sig(lo, hi)
+                d, lo, hi = ci_diff([r["payoff_ALLD"] for r in gl], [r["payoff_ALLD"] for r in base])
+                gtxt, ve = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi), sig(lo, hi)
             works = "—" if lim == 0 else "%d%%" % round(100 * st.mean(r["exceeding_dunbar"] for r in gl))
-            out.append("| %s | %g | %d | %d | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s |" % (
-                key[0], key[1], lim, n, works, fmt([r["share_ALLD"] for r in gl]), dtxt,
-                fmt([r["d_share"] for r in gl]), fmt([r["share_ALLC"] for r in gl], 3),
-                fmt([r.get("alld_trend_10k", 0.0) for r in gl], 3),
-                round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, v3))
-            if lim > 0:
-                pairs.append((key, lim, v1, v2, v3))
-    out += ["", "**Zgodność par** (obie predykcje utrzymane przy danym limicie):", ""]
-    for (preset, mut), lim, v1, v2, v3 in pairs:
-        if mut > 0:
-            out.append("- %s, mutacja %g, limit %d: P1+P3 **%s** (P1 %s, P3 %s); P2 część: %s" % (
-                preset, mut, lim, "tak" if v1 == "tak" and v3 == "tak" else
-                ("nie" if "nie" in (v1, v3) else "warunkowo"), v1, v3, v2))
-        else:
-            out.append("- %s, bez mutacji, limit %d: P2 część (wymiera) %s; P3 %s" % (preset, lim, v2, v3))
+            out.append("| %s | %s | %g | %g | %d | %d | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s | %s |" % (
+                key[0], key[1], key[2], key[3], lim, n, works, fmt([r["share_ALLD"] for r in gl]),
+                fmt([r["d_share"] for r in gl]), dtxt, gtxt, fmt([r["share_ALLC"] for r in gl], 3),
+                round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, vc, ve))
+            if lim > 0 and key[3] > 0:
+                pair = lambda v3: "tak" if v1 == "tak" and v3 == "tak" else ("nie" if "nie" in (v1, v3) else "warunkowo")
+                pairs.append((key, lim, v1, vc, ve, works))
+                col = key[:3]
+                # limit, który prawie nikogo nie ogranicza (< 20% agentów ma więcej partnerów), nie testuje P3
+                off = st.mean(r["exceeding_dunbar"] for r in gl) < 0.2
+                cells.setdefault(("P1+P3 kooperacja, limit %d" % lim), {})[col] = NA_LIMIT if off else pair(vc)
+                cells.setdefault(("P1+P3 zysk oszustów, limit %d" % lim), {})[col] = NA_LIMIT if off else pair(ve)
+    out += ["", "**Zgodność par** (P1 i P3 utrzymane przy tym samym limicie; „brak efektu” P3 → para warunkowo):", ""]
+    for key, lim, v1, vc, ve, works in pairs:
+        out.append("- %s, %s, prędkość %g, mutacja %g, limit %d (limit działa: %s): P1 %s; P3 kooperacja %s; "
+                   "P3 zysk oszustów %s" % (key[0], key[1], key[2], key[3], lim, works, v1, vc, ve))
+    if cells:
+        cols = sorted({c for d in cells.values() for c in d})
+        out += ["", "### Tabela zbiorcza par", "",
+                "| para | " + " | ".join(" / ".join(str(x) for x in c) for c in cols) + " | klasyfikacja |",
+                "|" + "---|" * (len(cols) + 2)]
+        order = lambda name: (name.split(",")[0], int(name.rsplit(" ", 1)[1]))
+        for name in sorted(cells, key=order):
+            d = cells[name]
+            out.append("| %s | %s | %s |" % (name, " | ".join("**%s**" % d.get(c, "—") for c in cols),
+                                             classify({c: v for c, v in d.items() if v != NA_LIMIT})))
     out.append("")
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(description="Etap 1: przebiegi i werdykty")
-    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN + PLAN_MIN_SPEED2 + PLAN_P4)
+    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN + PLAN_MIN_SPEED2 + PLAN_P4 + PAIRS)
     ap.add_argument("--N", nargs="*", type=int, default=[200, 500])
     ap.add_argument("--repeat", type=int, help="domyślnie: liczba powtórzeń z definicji eksperymentu")
     ap.add_argument("--end-cycle", type=int)

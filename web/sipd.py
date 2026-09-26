@@ -2085,6 +2085,16 @@ BATCH_EXPERIMENTS["PM5_P4_family"] = dict(
     params=dict(_P4, variant_name="PM5_P4_family", kin_matching_mode="family"))
 
 
+# para P1+P3 na wariantach sieci (bonus 7): ewolucja z mutacją + limit Dunbara, PD; prędkość 0,1 (P1)
+# i 2 (P3 - przy 0,1 agent ma ok. 5 różnych partnerów, limit nie działa)
+BATCH_EXPERIMENTS["PM7_P1P3_network"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"dunbar_limit": [0, 5, 15, 50, 150], "network_variant": ["baseline", "fragmented", "connected"],
+           "player_speed": [0.1, 2.0], "compat_N": [200]},
+    params=dict(_PM, variant_name="PM7_P1P3_network", prediction="S2", compat_mix="equal", evolution_on=True,
+                mutation_rate=0.01, payoff_preset="PD_classic", well_mixed=False, end_cycle=100000))
+
+
 def park_grid_for(n_agents):
     """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
     return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))
