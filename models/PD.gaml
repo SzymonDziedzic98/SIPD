@@ -220,6 +220,7 @@ global {
 	float kin_strategy_correlation <- 0.0; // P(członek dostaje strategię rodziny przy starcie)
 	float kin_imitation_bias <- 0.0;       // P(model do imitacji spośród krewnych)
 	float kin_matching_prob <- 0.0;        // α: P(partner spośród krewnych), tylko well_mixed
+	string kin_matching_mode <- "family";  // "family" = krewni; "strategy" = ta sama strategia (kontrola P4, r̂ = α)
 	string fitness_mode <- "own";          // "own" | "inclusive"
 	string inclusive_variant <- "strip";   // "strip" (decyzja 19): π + r·(dane − otrzymane); "add" tylko do porównań
 	bool kin_reward_learners <- false;     // QLEARN/AQLEARN: nagroda + r * wypłata krewnego (nie włączać bez zgody)
@@ -253,6 +254,7 @@ global {
 	// komunikat błędu konfiguracji modułu 3 ("" = poprawna)
 	string kin_config_error() {
 		if !(payoff_mode in ["classic", "donation"]) { return "payoff_mode musi być classic albo donation."; }
+		if !(kin_matching_mode in ["family", "strategy"]) { return "kin_matching_mode musi być family albo strategy."; }
 		if payoff_mode = "donation" and !(b > c and c > 0) { return "Gra dawcy wymaga b > c > 0."; }
 		if payoff_mode = "donation" and !unlimited_games { return "Gra dawcy wymaga unlimited_games = true."; }
 		if kin_on and !evolution_on { return "Moduł 3 (kin_on) wymaga evolution_on = true - bez ewolucji pokrewieństwo nie wpływa na nic."; }
@@ -710,7 +712,8 @@ global {
 			kin_on and kin_moves_str > 0 ? string(kin_coop_str / kin_moves_str) : "n/a",
 			kin_on and r_hat(kin_all) != -999.0 ? string(r_hat(kin_all)) : "n/a",
 			kin_on ? string(p4_intervals) : "n/a",
-			kin_on and p4_intervals > 0 ? string(p4_agree / p4_intervals) : "n/a"]
+			kin_on and p4_intervals > 0 ? string(p4_agree / p4_intervals) : "n/a",
+			kin_on ? kin_matching_mode : "n/a"]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -723,7 +726,10 @@ global {
 		save [variant_name, seed, payoff_preset, compat_N, well_mixed, mutation_rate, dunbar_limit, player_speed,
 			cycle, share_of("TFT"), share_of("ALLC"), share_of("ALLD"), share_of("FTFT"),
 			share_of("TF2T"), share_of("GRIM"), share_of("WSLS"), share_of("QLEARN"), share_of("AQLEARN"),
-			d_share, nb_character_changes]
+			d_share, nb_character_changes,
+			payoff_mode, payoff_mode = "donation" ? string(c / b) : "n/a",
+			kin_on ? kin_matching_mode : "n/a", kin_on ? string(kin_matching_prob) : "n/a",
+			kin_on ? fitness_mode : "n/a"]
 			to: "../results/character_timeseries.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -1751,7 +1757,9 @@ species player skills: [moving] {
 		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
 		// Moduł 3: w well_mixed z prawdopodobieństwem α partner spośród krewnych
 		if well_mixed and kin_on and kin_matching_prob > 0 and flip(kin_matching_prob) {
-			list<player> rel <- relatives();
+			string my_char <- character;
+			list<player> rel <- kin_matching_mode = "strategy"
+				? (player where (each != self and each.character = my_char)) : relatives();
 			if !empty(rel) { nearby <- rel; }
 		}
 		if !empty(nearby) {
@@ -1879,6 +1887,7 @@ experiment PD type: gui {
 	parameter "Korelacja strategii w rodzinie" var: kin_strategy_correlation min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
 	parameter "Imitacja krewnych" var: kin_imitation_bias min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
 	parameter "α: dobór krewnych (well_mixed)" var: kin_matching_prob min: 0.0 max: 1.0 category: "Moduł 3 – pokrewieństwo";
+	parameter "Dobór α: rodzina / strategia" var: kin_matching_mode among: ["family", "strategy"] category: "Moduł 3 – pokrewieństwo";
 	parameter "Dopasowanie" var: fitness_mode among: ["own", "inclusive"] category: "Moduł 3 – pokrewieństwo";
 	parameter "Wariant inclusive" var: inclusive_variant among: ["add", "strip"] category: "Moduł 3 – pokrewieństwo";
 	parameter "Blokada rewanżu (cykle)" var: pair_cooldown min: 0 category: "Moduł 3 – pokrewieństwo";
@@ -2371,6 +2380,72 @@ experiment PM4_heatmap_speed2 type: batch repeat: 1 keep_seed: true until: cycle
 	parameter "player_speed" var: player_speed init: 2.0;
 	parameter "partner_window" var: partner_window init: 1000000000;
 	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+}
+
+// Moduł 3 / P4 (well_mixed, ALLC/ALLD, gra dawcy b = 1; ewoluują tylko ALLC i ALLD).
+// Kalibracja: dobór wg strategii (r̂ = α z konstrukcji); właściwy test: dobór krewnych (r̂ zmierzone).
+experiment PM5_P4_strategy type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM5_P4_strategy";
+	parameter "prediction" var: prediction init: "P4";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "allc_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "evolvable_characters" var: evolvable_characters init: ["ALLC", "ALLD"];
+	parameter "mutation_rate" var: mutation_rate init: 0.01;
+	parameter "end_cycle" var: end_cycle init: 10000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "kin_on" var: kin_on init: true;
+	parameter "payoff_mode" var: payoff_mode init: "donation";
+	parameter "b" var: b init: 1.0;
+	parameter "c" var: c among: [0.3, 0.5];
+	parameter "pair_cooldown" var: pair_cooldown init: 0;
+	parameter "family_size" var: family_size init: 10;
+	parameter "family_r" var: family_r init: 0.5;
+	parameter "kin_strategy_correlation" var: kin_strategy_correlation init: 1.0;
+	parameter "kin_matching_mode" var: kin_matching_mode init: "strategy";
+	parameter "kin_matching_prob" var: kin_matching_prob among: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+	parameter "fitness_mode" var: fitness_mode init: "own";
+}
+
+experiment PM5_P4_family type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM5_P4_family";
+	parameter "prediction" var: prediction init: "P4";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "timeseries_export" var: timeseries_export init: true;
+	parameter "compat_mix" var: compat_mix init: "allc_alld";
+	parameter "compat_N" var: compat_N init: 200;
+	parameter "well_mixed" var: well_mixed init: true;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "evolvable_characters" var: evolvable_characters init: ["ALLC", "ALLD"];
+	parameter "mutation_rate" var: mutation_rate init: 0.01;
+	parameter "end_cycle" var: end_cycle init: 10000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "player_speed" var: player_speed init: 0.1;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "kin_on" var: kin_on init: true;
+	parameter "payoff_mode" var: payoff_mode init: "donation";
+	parameter "b" var: b init: 1.0;
+	parameter "c" var: c among: [0.3, 0.5];
+	parameter "pair_cooldown" var: pair_cooldown init: 0;
+	parameter "family_size" var: family_size init: 10;
+	parameter "family_r" var: family_r init: 0.5;
+	parameter "kin_strategy_correlation" var: kin_strategy_correlation init: 1.0;
+	parameter "kin_matching_mode" var: kin_matching_mode init: "family";
+	parameter "kin_matching_prob" var: kin_matching_prob among: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+	parameter "fitness_mode" var: fitness_mode among: ["own", "inclusive"];
 }
 
 // Test regresyjny nr 1: uruchom na tym commicie (baza) i po każdej zmianie; wiersze
@@ -3191,6 +3266,14 @@ experiment test_module3_families type: test {
         kin_matching_prob <- 0.6;
         loop times: 200 { ask player { do try_play(); } }
         assert abs(world.r_hat(kin_all) - 0.6) < 0.05;
+
+        // kontrola P4: dobór wg strategii, α = 0.7 -> r̂ ≈ 0.7
+        kin_matching_mode <- "strategy";
+        kin_all <- [0.0, 0.0, 0.0, 0.0, 0.0];
+        kin_matching_prob <- 0.7;
+        loop times: 200 { ask player { do try_play(); } }
+        assert abs(world.r_hat(kin_all) - 0.7) < 0.05;
+        kin_matching_mode <- "family";
 
         kin_matching_prob <- 0.0;
         kin_games_total <- 0; kin_games_kin <- 0;

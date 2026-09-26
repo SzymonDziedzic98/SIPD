@@ -119,6 +119,7 @@ DEFAULTS = {
     "kin_strategy_correlation": 0.0,   # P(członek dostaje strategię rodziny przy starcie)
     "kin_imitation_bias": 0.0,         # P(model do imitacji wybierany spośród krewnych)
     "kin_matching_prob": 0.0,          # α: P(partner spośród krewnych), tylko well_mixed
+    "kin_matching_mode": "family",     # "family" = krewni; "strategy" = agenci z tą samą strategią (kontrola P4, r̂ = α)
     "fitness_mode": "own",             # "own" | "inclusive"
     "inclusive_variant": "strip",      # decyzja 19: "strip" (π + r·(dane - otrzymane)); "add" tylko do porównań
     "kin_reward_learners": False,      # QLEARN/AQLEARN: nagroda + r·wypłata krewnego (nie włączać bez zgody)
@@ -211,6 +212,7 @@ GUI_PARAMETERS = [
         ("kin_strategy_correlation", "Korelacja strategii w rodzinie"),
         ("kin_imitation_bias", "Imitacja krewnych"),
         ("kin_matching_prob", "α: dobór krewnych (well_mixed)"),
+        ("kin_matching_mode", "Dobór α: rodzina / strategia"),
         ("fitness_mode", "Dopasowanie"), ("inclusive_variant", "Wariant inclusive"),
     ]),
     ("Diagnostyka", [
@@ -1214,7 +1216,10 @@ class Player:
     def reflex_do_you_wanna_play(self):
         m, P = self.model, self.model.p
         if P.well_mixed and P.kin_on and P.kin_matching_prob > 0 and self.flip(P.kin_matching_prob):
-            nearby = self.relatives()              # α: partner spośród krewnych
+            if P.kin_matching_mode == "strategy":  # kontrola P4: partner z tą samą strategią
+                nearby = [q for q in m.players if q is not self and q.character == self.character]
+            else:
+                nearby = self.relatives()          # α: partner spośród krewnych
             if not nearby:
                 nearby = [q for q in m.players if q is not self]
         elif P.well_mixed:
@@ -1339,6 +1344,8 @@ class Model:
         if P.compat_core:
             self.apply_compat_core()
         self.warnings = []
+        if P.kin_matching_mode not in ("family", "strategy"):
+            raise ModelError("kin_matching_mode musi być family albo strategy: %s" % P.kin_matching_mode)
         if P.payoff_mode not in ("classic", "donation"):
             raise ModelError("payoff_mode musi być classic albo donation: %s" % P.payoff_mode)
         if P.payoff_mode == "donation":
@@ -1667,7 +1674,8 @@ class Model:
                        P.kin_imitation_bias, P.kin_matching_prob, P.fitness_mode, P.inclusive_variant,
                        na(s["r_hat_all"]), na(s["r_hat_kin"]), na(fw.get("r_hat_all")), na(lw.get("r_hat_all")),
                        na(s["kin_share"]), na(s["coop_kin"]), na(s["coop_str"]), na(s["r_hat_all_pooled"]),
-                       self.p4_intervals, self.p4_agree / self.p4_intervals if self.p4_intervals else "n/a"]
+                       self.p4_intervals, self.p4_agree / self.p4_intervals if self.p4_intervals else "n/a",
+                       P.kin_matching_mode]
 
     # --- zdarzenie po grze i metryka stabilności spotkań ----------------------
     def on_game_played(self, g):
@@ -1739,7 +1747,10 @@ class Model:
         self.timeseries_rows.append([P.variant_name, self.seed, P.payoff_preset, P.compat_N, P.well_mixed,
                                      P.mutation_rate, P.dunbar_limit, P.player_speed, self.cycle]
                                     + [self.share_of(c) for c in TIMESERIES_CHARACTERS]
-                                    + [d_share, self.nb_character_changes])
+                                    + [d_share, self.nb_character_changes]
+                                    + [P.payoff_mode, P.c / P.b if P.payoff_mode == "donation" else "n/a"]
+                                    + ([P.kin_matching_mode, P.kin_matching_prob, P.fitness_mode] if P.kin_on
+                                       else ["n/a"] * 3))
 
     def exploitation_rate(self):
         return self.nb_exploitations / self.nb_game if self.nb_game else 0.0
@@ -1906,7 +1917,7 @@ KIN_HEADER = ["payoff_mode", "b", "c", "c_over_b", "kin_on", "family_size", "fam
               "kin_strategy_correlation", "kin_imitation_bias", "kin_matching_prob", "fitness_mode",
               "inclusive_variant", "r_hat_all", "r_hat_kin", "r_hat_first_window", "r_hat_last_window",
               "kin_interaction_share", "coop_with_kin", "coop_with_strangers", "r_hat_all_pooled",
-              "p4_intervals", "p4_sign_agreement"]
+              "p4_intervals", "p4_sign_agreement", "kin_matching_mode"]
 
 NET_STAT_KEYS = ["net_nodes", "net_edges", "net_mean_degree", "net_avg_path", "net_density",
                  "net_betw_max", "net_betw_mean"]
@@ -1928,7 +1939,8 @@ CSV_HEADERS = {
     "compat_results.csv": COMPAT_HEADER,
     "character_timeseries.csv": ["variant_name", "seed", "payoff_preset", "compat_N", "well_mixed",
                                  "mutation_rate", "dunbar_limit", "player_speed", "cycle"] + ["share_" + c for c in TIMESERIES_CHARACTERS]
-                                + ["d_share_window", "nb_character_changes"],
+                                + ["d_share_window", "nb_character_changes", "payoff_mode", "c_over_b",
+                                   "kin_matching_mode", "kin_matching_prob", "fitness_mode"],
     "PD.csv": ["nb_game", "cycle", "p1", "p2", "p1_move", "p2_move", "p1.score", "p2.score"],
     "ablation_results.csv": ["variant_name", "mean_score_all", "mean_for_QLEARN", "mean_for_AQLEARN",
                              "mean_for_classic", "aqlearn_clique_fraction", "aqlearn_avg_distance"],
@@ -2054,6 +2066,23 @@ for _name in ("PM2_P3_space", "PM3_P3_network", "PM4_heatmap"):
     _spec = BATCH_EXPERIMENTS[_name]
     BATCH_EXPERIMENTS[_name + "_speed2"] = dict(_spec, params=dict(_spec["params"], player_speed=2.0,
                                                                   variant_name=_name + "_speed2"))
+
+
+# Moduł 3 / P4 (well_mixed, ALLC/ALLD, gra dawcy b = 1): kalibracja z doborem wg strategii (r̂ = α z konstrukcji)
+# i właściwy test z rodzinami (r̂ zmierzone); ewoluują tylko ALLC i ALLD
+_P4 = dict(_PM, prediction="P4", compat_mix="allc_alld", evolution_on=True, well_mixed=True, kin_on=True,
+           payoff_mode="donation", b=1.0, pair_cooldown=0, kin_strategy_correlation=1.0, family_size=10,
+           family_r=0.5, mutation_rate=0.01, evolvable_characters=["ALLC", "ALLD"], end_cycle=10000,
+           timeseries_export=True)
+_ALPHAS = [round(0.1 * i, 1) for i in range(10)]
+BATCH_EXPERIMENTS["PM5_P4_strategy"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"kin_matching_prob": _ALPHAS, "c": [0.3, 0.5], "compat_N": [200]},
+    params=dict(_P4, variant_name="PM5_P4_strategy", kin_matching_mode="strategy", fitness_mode="own"))
+BATCH_EXPERIMENTS["PM5_P4_family"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"kin_matching_prob": _ALPHAS, "c": [0.3, 0.5], "fitness_mode": ["own", "inclusive"], "compat_N": [200]},
+    params=dict(_P4, variant_name="PM5_P4_family", kin_matching_mode="family"))
 
 
 def park_grid_for(n_agents):
@@ -2839,6 +2868,18 @@ def t_r_hat_matches_alpha():
         m = _kin_model(kin_matching_prob=alpha, kin_strategy_correlation=1.0, pair_cooldown=0).run(400)
         r = m.kin_stats.summary()["r_hat_all"]
         assert abs(r - alpha) < 0.03, (alpha, r)
+
+
+def t_strategy_matching_r_hat():
+    # kontrola P4: partner z tą samą strategią z prawdopodobieństwem α -> r̂ ≈ α bez względu na rodziny
+    for alpha in (0.3, 0.7):
+        m = _kin_model(kin_matching_prob=alpha, kin_matching_mode="strategy", pair_cooldown=0).run(400)
+        assert abs(m.kin_stats.summary()["r_hat_all"] - alpha) < 0.03, alpha
+    try:
+        _kin_model(kin_matching_mode="xyz")
+        assert False, "zły kin_matching_mode przepuszczony"
+    except ModelError:
+        pass
 
 
 def t_pair_cooldown_suppresses_kin_games():
