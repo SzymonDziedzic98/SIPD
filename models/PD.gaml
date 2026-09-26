@@ -2430,6 +2430,29 @@ experiment PM8_P2_network type: batch repeat: 10 keep_seed: true until: cycle > 
 	parameter "player_speed" var: player_speed among: [0.1, 2.0];
 }
 
+// Pełny przegląd: N = 500, trzy macierze, sieci x prędkość x limit x mutacja, 15 powtórzeń (1620 przebiegów)
+experiment PM9_full_N500 type: batch repeat: 15 keep_seed: true until: cycle > end_cycle {
+	float seed <- 20261123.0;
+	parameter "variant_name" var: variant_name init: "PM9_full_N500";
+	parameter "prediction" var: prediction init: "S2";
+	parameter "log_games" var: log_games init: false;
+	parameter "compat_core" var: compat_core init: true;
+	parameter "network_cleanup" var: network_cleanup init: true;
+	parameter "compat_export" var: compat_export init: true;
+	parameter "compat_mix" var: compat_mix init: "equal";
+	parameter "compat_N" var: compat_N init: 500;
+	parameter "evolution_on" var: evolution_on init: true;
+	parameter "well_mixed" var: well_mixed init: false;
+	parameter "end_cycle" var: end_cycle init: 100000;
+	parameter "vision_radius" var: vision_radius init: 30;
+	parameter "partner_window" var: partner_window init: 1000000000;
+	parameter "payoff_preset" var: payoff_preset among: ["PD_classic", "weak_PD", "snowdrift"];
+	parameter "mutation_rate" var: mutation_rate among: [0.0, 0.01];
+	parameter "dunbar_limit" var: dunbar_limit among: [0, 5, 15];
+	parameter "network_variant" var: network_variant among: ["baseline", "fragmented", "connected"];
+	parameter "player_speed" var: player_speed among: [0.1, 2.0];
+}
+
 // Moduł 3 / P4 (well_mixed, ALLC/ALLD, gra dawcy b = 1; ewoluują tylko ALLC i ALLD).
 // Kalibracja: dobór wg strategii (r̂ = α z konstrukcji); właściwy test: dobór krewnych (r̂ zmierzone).
 experiment PM5_P4_strategy type: batch repeat: 10 keep_seed: true until: cycle > end_cycle {

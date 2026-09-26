@@ -2104,6 +2104,17 @@ BATCH_EXPERIMENTS["PM8_P2_network"] = dict(
                 mutation_rate=0.0, payoff_preset="PD_classic", well_mixed=False, end_cycle=100000))
 
 
+# pełny przegląd (bonus 8): N = 500, trzy macierze, sieci x prędkość x limit x mutacja, 15 powtórzeń
+# (bez szeregów czasowych - rozmiar pliku)
+BATCH_EXPERIMENTS["PM9_full_N500"] = dict(
+    repeat=15, until="end_cycle", seed=20261123,
+    among={"payoff_preset": ["PD_classic", "weak_PD", "snowdrift"], "mutation_rate": [0.0, 0.01],
+           "dunbar_limit": [0, 5, 15], "network_variant": ["baseline", "fragmented", "connected"],
+           "player_speed": [0.1, 2.0], "compat_N": [500]},
+    params=dict(_PM, variant_name="PM9_full_N500", prediction="S2", compat_mix="equal", evolution_on=True,
+                well_mixed=False, end_cycle=100000, compat_N=500, timeseries_export=False))
+
+
 def park_grid_for(n_agents):
     """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
     return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))

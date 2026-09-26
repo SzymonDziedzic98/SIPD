@@ -49,6 +49,7 @@ PLAN_MIN = ["PM2_P12_space", "PM2_P12_wellmixed", "PM2_P3_space", "PM2_P3_wellmi
 PLAN_MIN_SPEED2 = ["PM2_P3_space_speed2", "PM3_P3_network_speed2", "PM4_heatmap_speed2"]
 PLAN_P4 = ["PM5_P4_strategy", "PM5_P4_family"]
 PAIRS = ["PM7_P1P3_network", "PM8_P2_network"]
+FULL = ["PM9_full_N500"]
 FIX = 0.05
 
 
@@ -110,6 +111,12 @@ def run(args):
         jobs = [j for j in jobs if job_signature(j[0], j[1], keys) not in done]
         print("wznowienie: %d z %d przebiegów już zapisanych" % (before - len(jobs), before), flush=True)
     jobs.sort(key=lambda j: -(j[0]["compat_N"] * (4 if j[0]["well_mixed"] else 1)))   # najdroższe najpierw
+    if args.interleave:
+        # najpierw 1. powtórzenie każdej kombinacji, potem 2. itd. - przerwany przegląd ma pełną siatkę
+        rank = {}
+        for p, sd in jobs:
+            rank.setdefault(sd, len(rank))
+        jobs.sort(key=lambda j: rank[j[1]])
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     t0 = time.time()
     ts_out = args.ts_out or args.out.replace(".csv", "_timeseries.csv")
@@ -533,13 +540,14 @@ def verdict_stage2(rows):
 
 def main():
     ap = argparse.ArgumentParser(description="Etap 1: przebiegi i werdykty")
-    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN + PLAN_MIN_SPEED2 + PLAN_P4 + PAIRS)
+    ap.add_argument("--experiments", nargs="*", default=PLAN_MIN, choices=STAGE1 + STAGE2 + PLAN_MIN + PLAN_MIN_SPEED2 + PLAN_P4 + PAIRS + FULL)
     ap.add_argument("--N", nargs="*", type=int, default=[200, 500])
     ap.add_argument("--repeat", type=int, help="domyślnie: liczba powtórzeń z definicji eksperymentu")
     ap.add_argument("--end-cycle", type=int)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="compat_results.csv")
     ap.add_argument("--ts-out", help="plik szeregów czasowych (domyślnie <out>_timeseries.csv)")
+    ap.add_argument("--interleave", action="store_true", help="kolejność: powtórzenie po powtórzeniu")
     ap.add_argument("--resume", action="store_true", help="dopisz tylko przebiegi, których nie ma jeszcze w --out")
     ap.add_argument("--verdict", metavar="CSV", help="tylko policz werdykty z istniejącego pliku")
     a = ap.parse_args()
