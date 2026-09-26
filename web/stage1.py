@@ -48,7 +48,7 @@ PLAN_MIN = ["PM2_P12_space", "PM2_P12_wellmixed", "PM2_P3_space", "PM2_P3_wellmi
             "PM3_P3_network", "PM4_heatmap"]
 PLAN_MIN_SPEED2 = ["PM2_P3_space_speed2", "PM3_P3_network_speed2", "PM4_heatmap_speed2"]
 PLAN_P4 = ["PM5_P4_strategy", "PM5_P4_family"]
-PAIRS = ["PM7_P1P3_network"]
+PAIRS = ["PM7_P1P3_network", "PM8_P2_network"]
 FIX = 0.05
 
 

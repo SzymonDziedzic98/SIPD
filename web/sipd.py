@@ -2095,6 +2095,15 @@ BATCH_EXPERIMENTS["PM7_P1P3_network"] = dict(
                 mutation_rate=0.01, payoff_preset="PD_classic", well_mixed=False, end_cycle=100000))
 
 
+# pary z P2 na wariantach sieci: bez mutacji (część P2 "ALLC wymiera"), limit Dunbara, PD
+BATCH_EXPERIMENTS["PM8_P2_network"] = dict(
+    repeat=10, until="end_cycle", seed=20261123,
+    among={"dunbar_limit": [0, 5, 15], "network_variant": ["baseline", "fragmented", "connected"],
+           "player_speed": [0.1, 2.0], "compat_N": [200]},
+    params=dict(_PM, variant_name="PM8_P2_network", prediction="S2", compat_mix="equal", evolution_on=True,
+                mutation_rate=0.0, payoff_preset="PD_classic", well_mixed=False, end_cycle=100000))
+
+
 def park_grid_for(n_agents):
     """Syntetyczny park skalowany z populacją: ta sama gęstość co 20 agentów na siatce 10x10."""
     return max(10, int(round(10 * math.sqrt(n_agents / 20.0))))
