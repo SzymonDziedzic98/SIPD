@@ -317,7 +317,7 @@ def verdict_p4(rows):
         ok = [(r["r_hat_all"] > cb) == (r["share_ALLC"] > 0.5) for r in test]
         v = share_verdict(sum(ok) / len(ok)) if ok else "—"
         if v == "tak" and not above:
-            v = "warunkowo"      # sprawdzona tylko strona r̂ < c/b
+            v = "tak, tylko r̂ < c/b"      # sprawdzona tylko jedna strona progu - progu nie da się wyznaczyć
         calib = ("; r̂ ≈ α: %s (maks. |r̂ − α| = %.3f)" % ("tak" if max(dev) <= 0.05 else "NIE", max(dev))) if dev else ""
         summary.append("- %s, c/b = %g, %s: kierunek zgodny z regułą w %d/%d przebiegów (poza ±%g od progu; "
                        "z r̂ > c/b: %d) → **%s**; próg r* = %s%s" % (

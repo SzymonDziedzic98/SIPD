@@ -98,7 +98,11 @@ wyraźnego progu. Stąd decyzja 12.
 | 18 | r̂ liczone z ruchów (C = 1, D = 0), także dla strategii warunkowych. |
 | 19 | `fitness_mode = "inclusive"` w wariancie `"strip"`: π = własna średnia + r·(Σ skutków moich ruchów dla krewnych − Σ skutków ruchów krewnych dla mnie) / gry. Skutek = wypłata partnera przy moim ruchu − jego wypłata, gdybym zagrał D. `"add"` tylko do porównań. |
 | 20 | r̂ liczone w obrębie interwałów ewolucji (skład populacji stały): Σ Sxy / Σ Sxx po blokach. Regresja z całego okna jest zawyżona przez zmiany składu w czasie (np. α = 0 → r̂ 0,3). Wersja łączna zostaje w kolumnie `r_hat_all_pooled`. |
+| 21 | Kalibracja P4 z doborem wg strategii (`kin_matching_mode = "strategy"`): r̂ = α z konstrukcji. Rodziny (`"family"`) to właściwy test z r̂ zmierzonym. |
+| 22 | W P4 ewoluują tylko ALLC i ALLD (`evolvable_characters`); mutacja do strategii warunkowych zawyżała r̂ liczone z ruchów. P4: b = 1, `fermi_k` 0,5. |
 
 Test znaku (`p4_intervals`, `p4_sign_agreement`): w każdym interwale ewolucji, przy 0 < udział ALLC < 1,
 porównanie znaku zmiany udziału ALLC ze znakiem r̂_k·b − c (r̂_k z gier tego interwału). Zmiana obejmuje
 też mutacje.
+
+Wyniki P4: `docs/p4_verdict_N200_r10.md`.
