@@ -460,13 +460,15 @@ NA_LIMIT = "n/d (limit nie działa)"
 
 
 def verdict_stage2(rows):
-    """Pary P1+P3 (ewolucja + limit Dunbara). P3 dwiema miarami, jak w walidacji pojedynczej:
-    spadek kooperacji (udział D przy limicie większy niż bez limitu; główna) i zysk oszustów
-    (wypłata ALLD na grę większa niż bez limitu; dodatkowa). Istotność: 95% CI różnicy."""
+    """Pary P1+P3 (ewolucja + limit Dunbara). P3 trzema miarami: spadek kooperacji (udział D przy limicie
+    większy niż bez limitu; główna, CLAUDE.md), udział oszustów (udział ALLD większy; miara selekcji,
+    jak w etapie 2) i zysk oszustów (wypłata ALLD na grę większa; jak w walidacji pojedynczej).
+    Istotność: 95% CI różnicy."""
     out = ["## Zestawienia parami – P1+P3 (ewolucja + limit Dunbara)", "",
            "| układ | macierz | prędkość | mutacja | limit | n | limit działa | ALLD | udział D | Δ udziału D (95% CI) | "
-           "Δ wypłaty ALLD (95% CI) | ALLC | stabilizacja | P1 | P2 (część) | P3 kooperacja | P3 zysk oszustów |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "Δ ALLD (95% CI) | Δ wypłaty ALLD (95% CI) | ALLC | stabilizacja | P1 | P2 (część) | P3 kooperacja | "
+           "P3 udział oszustów | P3 zysk oszustów |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     pairs, cells = [], {}
     keyf = lambda r: (layout(r), r["payoff_preset"], r.get("player_speed", 2.0), r["mutation_rate"])
     sig = lambda lo, hi: "tak" if lo > 0 else ("nie" if hi < 0 else "brak efektu")
@@ -487,35 +489,40 @@ def verdict_stage2(rows):
                     ("nie" if frac <= 0.2 else "warunkowo")
                 p2 = "utrzymuje się: " + v2
             if lim == 0 or len(base) < 2 or n < 2:
-                dtxt = gtxt = vc = ve = "—"
+                dtxt = atxt = gtxt = vc = va = ve = "—"
             else:
                 d, lo, hi = ci_diff([r["d_share"] for r in gl], [r["d_share"] for r in base])
                 dtxt, vc = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi), sig(lo, hi)
+                d, lo, hi = ci_diff([r["share_ALLD"] for r in gl], [r["share_ALLD"] for r in base])
+                atxt, va = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi), sig(lo, hi)
                 d, lo, hi = ci_diff([r["payoff_ALLD"] for r in gl], [r["payoff_ALLD"] for r in base])
                 gtxt, ve = "%+.3f [%+.3f, %+.3f]" % (d, lo, hi), sig(lo, hi)
             works = "—" if lim == 0 else "%d%%" % round(100 * st.mean(r["exceeding_dunbar"] for r in gl))
-            out.append("| %s | %s | %g | %g | %d | %d | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s | %s |" % (
+            out.append("| %s | %s | %g | %g | %d | %d | %s | %s | %s | %s | %s | %s | %s | %d%% | %s | %s | %s | %s | %s |" % (
                 key[0], key[1], key[2], key[3], lim, n, works, fmt([r["share_ALLD"] for r in gl]),
-                fmt([r["d_share"] for r in gl]), dtxt, gtxt, fmt([r["share_ALLC"] for r in gl], 3),
-                round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, vc, ve))
+                fmt([r["d_share"] for r in gl]), dtxt, atxt, gtxt, fmt([r["share_ALLC"] for r in gl], 3),
+                round(100 * sum(r["stabilized"] for r in gl) / n), v1, p2, vc, va, ve))
             if lim > 0 and key[3] > 0:
                 pair = lambda v3: "tak" if v1 == "tak" and v3 == "tak" else ("nie" if "nie" in (v1, v3) else "warunkowo")
-                pairs.append((key, lim, v1, vc, ve, works))
+                pairs.append((key, lim, v1, vc, va, ve, works))
                 col = key[:3]
                 # limit, który prawie nikogo nie ogranicza (< 20% agentów ma więcej partnerów), nie testuje P3
                 off = st.mean(r["exceeding_dunbar"] for r in gl) < 0.2
                 cells.setdefault(("P1+P3 kooperacja, limit %d" % lim), {})[col] = NA_LIMIT if off else pair(vc)
+                cells.setdefault(("P1+P3 udział oszustów, limit %d" % lim), {})[col] = NA_LIMIT if off else pair(va)
                 cells.setdefault(("P1+P3 zysk oszustów, limit %d" % lim), {})[col] = NA_LIMIT if off else pair(ve)
     out += ["", "**Zgodność par** (P1 i P3 utrzymane przy tym samym limicie; „brak efektu” P3 → para warunkowo):", ""]
-    for key, lim, v1, vc, ve, works in pairs:
+    for key, lim, v1, vc, va, ve, works in pairs:
         out.append("- %s, %s, prędkość %g, mutacja %g, limit %d (limit działa: %s): P1 %s; P3 kooperacja %s; "
-                   "P3 zysk oszustów %s" % (key[0], key[1], key[2], key[3], lim, works, v1, vc, ve))
+                   "P3 udział oszustów %s; P3 zysk oszustów %s" % (key[0], key[1], key[2], key[3], lim, works,
+                                                                   v1, vc, va, ve))
     if cells:
         cols = sorted({c for d in cells.values() for c in d})
         out += ["", "### Tabela zbiorcza par", "",
                 "| para | " + " | ".join(" / ".join(str(x) for x in c) for c in cols) + " | klasyfikacja |",
                 "|" + "---|" * (len(cols) + 2)]
-        order = lambda name: (name.split(",")[0], int(name.rsplit(" ", 1)[1]))
+        kinds = ["kooperacja", "udział oszustów", "zysk oszustów"]
+        order = lambda name: (kinds.index(name.split(",")[0][6:]), int(name.rsplit(" ", 1)[1]))
         for name in sorted(cells, key=order):
             d = cells[name]
             out.append("| %s | %s | %s |" % (name, " | ".join("**%s**" % d.get(c, "—") for c in cols),
