@@ -228,11 +228,80 @@ def verdict(path):
                 summary.append("- %s, %s, N=%d: spadek kooperacji **%s** (próg: %s); zysk oszustów **%s** (próg: %s)" % (
                     key[0], key[1], key[2], vc, thr_c, ve, thr_e))
         out += ["", "**P3 łącznie:**", ""] + summary + [""]
+    p4 = [r for r in rows if r["prediction"] == "P4"]
+    if p4:
+        out += verdict_p4(p4)
     s2 = [r for r in rows if r["prediction"] == "S2"]
     if s2:
         out += verdict_stage2(s2)
     out += summary_table(rows)
     return "\n".join(out)
+
+
+P4_MARGIN = 0.05   # przebiegi z |r̂ - c/b| <= P4_MARGIN nie wchodzą do testu kierunku (zbyt blisko progu)
+
+
+def p4_threshold(points):
+    """points: [(średnie r̂, średni udział ALLC)] posortowane po r̂. Próg r* = interpolacja liniowa
+    pierwszego przejścia udziału ALLC przez 0,5 (z dołu do góry); None, gdy brak przejścia."""
+    for (r0, a0), (r1, a1) in zip(points, points[1:]):
+        if a0 < 0.5 <= a1:
+            return r0 + (r1 - r0) * (0.5 - a0) / (a1 - a0) if a1 != a0 else r0
+    return None
+
+
+def verdict_p4(rows):
+    """P4: kooperacja (ALLC) przejmuje populację, gdy r̂ > c/b, i zanika, gdy r̂ < c/b (r̂ zmierzone)."""
+    out = ["## P4 – reguła Hamiltona (well_mixed, ALLC/ALLD, gra dawcy)", "",
+           "Dobór `strategy` = kalibracja (partner z tą samą strategią z prawdopodobieństwem α, r̂ = α z konstrukcji); "
+           "`family` = właściwy test z rodzinami (r̂ zmierzone). ALLC = udział na końcu (średnia z ostatniego okna); "
+           "„ALLC wygrywa” = udział > 0,5. Test znaku = odsetek interwałów ewolucji, w których zmiana udziału ALLC "
+           "ma znak r̂_k·b − c.", "",
+           "| dobór | c/b | dopasowanie | α | n | r̂ | r̂ − α | ALLC | ALLC wygrywa | stabilizacja | test znaku |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    keyf = lambda r: (r["kin_matching_mode"], r["c_over_b"], r["fitness_mode"])
+    summary, cols = [], {}
+    for key, grp in itertools.groupby(sorted(rows, key=lambda r: keyf(r) + (r["kin_matching_prob"],)), key=keyf):
+        g = list(grp)
+        mode, cb, fm = key
+        points, dev = [], []
+        for a in sorted({r["kin_matching_prob"] for r in g}):
+            ga = [r for r in g if r["kin_matching_prob"] == a]
+            rh = [r["r_hat_all"] for r in ga if isinstance(r["r_hat_all"], float)]
+            sg = [r["p4_sign_agreement"] for r in ga if isinstance(r["p4_sign_agreement"], float)]
+            allc = [r["share_ALLC"] for r in ga]
+            if rh:
+                points.append((st.mean(rh), st.mean(allc)))
+                dev.append(abs(st.mean(rh) - a))
+            out.append("| %s | %g | %s | %g | %d | %s | %s | %s | %d%% | %d%% | %s |" % (
+                mode, cb, fm, a, len(ga), fmt(rh, 3) if rh else "n/a",
+                "%+.3f" % (st.mean(rh) - a) if rh else "n/a", fmt(allc, 3),
+                round(100 * sum(x > 0.5 for x in allc) / len(ga)),
+                round(100 * sum(r["stabilized"] for r in ga) / len(ga)), fmt(sg) if sg else "n/a"))
+        points.sort()
+        thr = p4_threshold(points)
+        test = [r for r in g if isinstance(r["r_hat_all"], float) and abs(r["r_hat_all"] - cb) > P4_MARGIN]
+        above = [r for r in test if r["r_hat_all"] > cb]
+        ok = [(r["r_hat_all"] > cb) == (r["share_ALLC"] > 0.5) for r in test]
+        v = share_verdict(sum(ok) / len(ok)) if ok else "—"
+        if v == "tak" and not above:
+            v = "warunkowo"      # sprawdzona tylko strona r̂ < c/b
+        calib = ("; r̂ ≈ α: %s (maks. |r̂ − α| = %.3f)" % ("tak" if max(dev) <= 0.05 else "NIE", max(dev))) if dev else ""
+        summary.append("- %s, c/b = %g, %s: kierunek zgodny z regułą w %d/%d przebiegów (poza ±%g od progu; "
+                       "z r̂ > c/b: %d) → **%s**; próg r* = %s%s" % (
+                           mode, cb, fm, sum(ok), len(ok), P4_MARGIN, len(above), v,
+                           "%.3f (odchylenie od c/b %+.3f)" % (thr, thr - cb) if thr is not None
+                           else "brak przejścia (maks. średnie r̂ = %.3f)" % max(p[0] for p in points) if points
+                           else "n/a", calib))
+        cols.setdefault(("P4 %s / %s" % (mode, fm)), {})[("well_mixed", "c/b = %g" % cb)] = v
+    out += ["", "**P4 łącznie:**", ""] + summary + [""]
+    cset = sorted({c for d in cols.values() for c in d})
+    out += ["### Tabela zbiorcza P4", "", "| wariant | " + " | ".join(" / ".join(c) for c in cset) + " | klasyfikacja |",
+            "|" + "---|" * (len(cset) + 2)]
+    for name, d in sorted(cols.items()):
+        out.append("| %s | %s | %s |" % (name, " | ".join("**%s**" % d.get(c, "—") for c in cset), classify(d)))
+    out.append("")
+    return out
 
 
 def p3_coop_verdict(dsig):
