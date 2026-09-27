@@ -1,8 +1,9 @@
 #!/bin/sh
-# Zapis częściowych wyników długiego przeglądu: co INTERVAL sekund commit + push plików, dopóki działa proces.
-# Użycie: sh web/autosave.sh <wzorzec procesu> <interwał s> <plik> [plik...]
-PATTERN="$1"; INTERVAL="$2"; shift 2
+# Zapis częściowych wyników długiego przeglądu: co INTERVAL sekund commit + push plików, dopóki żyje proces PID.
+# Użycie: sh web/autosave.sh <PID> <interwał s> <plik> [plik...]
+PID="$1"; INTERVAL="$2"; shift 2
 save() {
+    [ -s "$1" ] || return 0
     git add -f "$@" 2>/dev/null
     if ! git diff --cached --quiet -- "$@"; then
         n=$(($(wc -l < "$1") - 1))
@@ -12,8 +13,10 @@ save() {
         rm -f "$msg"
     fi
 }
-while pgrep -f "$PATTERN" > /dev/null; do
-    sleep "$INTERVAL"
-    save "$@"
+elapsed=0
+while kill -0 "$PID" 2>/dev/null; do
+    sleep 60
+    elapsed=$((elapsed + 60))
+    if [ "$elapsed" -ge "$INTERVAL" ]; then save "$@"; elapsed=0; fi
 done
 save "$@"
