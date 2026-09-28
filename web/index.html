@@ -371,6 +371,9 @@ function inputFor(key) {
   if (key === "game_type") {
     el = document.createElement("select");
     ["PD", "weak_PD", "snowdrift"].forEach((g) => el.add(new Option(g, g)));
+  } else if (key === "rest_zone_placement") {
+    el = document.createElement("select");
+    ["dispersed", "central", "peripheral", "random"].forEach((g) => el.add(new Option(g, g)));
   } else if (key === "base_character_qlearn") {
     el = document.createElement("select");
     ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"].forEach((g) => el.add(new Option(g, g)));
@@ -380,8 +383,8 @@ function inputFor(key) {
     el = document.createElement("input"); el.type = "checkbox";
   } else if (typeof v === "number") {
     el = document.createElement("input"); el.type = "number";
-    el.step = Number.isInteger(v) && !key.startsWith("payoff") ? "1" : "any";
-    el.dataset.int = (Number.isInteger(v) && !key.startsWith("payoff") && !/sensitivity|influence|boost|decay|bump|strength|rate|threshold/.test(key)) ? "1" : "";
+    el.dataset.int = (Number.isInteger(v) && !key.startsWith("payoff") && !/sensitivity|influence|boost|decay|bump|strength|rate|threshold|target|recovery|fatigue|share/.test(key)) ? "1" : "";
+    el.step = el.dataset.int ? "1" : "any";
   } else {
     el = document.createElement("input"); el.type = "text";
   }
@@ -557,13 +560,19 @@ function drawMap(canvas, mode) {
       ctx.beginPath(); ctx.moveTo(X(p.x), Y(p.y)); ctx.lineTo(X(x), Y(y)); ctx.stroke();
     }
   }
+  // Moduł 4: strefy odpoczynku (kwadraty)
+  for (const [x, y] of snap.rest_zones || []) {
+    ctx.fillStyle = css("--accent"); ctx.globalAlpha = 0.35;
+    ctx.fillRect(X(x) - 9, Y(y) - 9, 18, 18); ctx.globalAlpha = 1;
+    ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.strokeRect(X(x) - 9, Y(y) - 9, 18, 18);
+  }
   // agenci: promień rośnie z normalized_visual_height (odpowiednik wysokości stożka)
   for (const p of snap.players) {
     const r = 3.5 + p.h * 0.6;
     ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), r, 0, 2 * Math.PI);
     ctx.fillStyle = COLORS[p.ch] || "#888"; ctx.fill();
-    ctx.lineWidth = p.i === snap.sel ? 3 : 1;
-    ctx.strokeStyle = p.i === snap.sel ? css("--focus") : css("--panel");
+    ctx.lineWidth = p.i === snap.sel ? 3 : (p.rest ? 2 : 1);
+    ctx.strokeStyle = p.i === snap.sel ? css("--focus") : (p.rest ? css("--accent") : css("--panel"));
     ctx.stroke();
   }
 }

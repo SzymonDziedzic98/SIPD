@@ -124,6 +124,18 @@ DEFAULTS = {
     "inclusive_variant": "strip",      # decyzja 19: "strip" (π + r·(dane - otrzymane)); "add" tylko do porównań
     "kin_reward_learners": False,      # QLEARN/AQLEARN: nagroda + r·wypłata krewnego (nie włączać bez zgody)
     "kin_window": 1000,                # okno r̂ (cykle)
+    # --- Moduł 4: strefy odpoczynku i zmęczenie (domyślnie wyłączony) ---
+    "rest_on": False,
+    "rest_zone_count": 10,             # liczba stref (węzły sieci z ławkami, placem zabaw itp.)
+    "rest_zone_placement": "dispersed",  # "dispersed" | "central" | "peripheral" | "random"
+    "frail_share": 0.2,                # udział osób starszych / schorowanych
+    "fatigue_regular_mean": 0.07,      # utrata energii na 100 m (rozkład normalny) - zwykli
+    "fatigue_regular_sd": 0.015,
+    "fatigue_frail_mean": 0.2,         # starsi / schorowani męczą się szybciej
+    "fatigue_frail_sd": 0.05,
+    "rest_threshold": 0.3,             # poniżej tej energii agent idzie do najbliższej strefy
+    "rest_recovery": 0.002,            # odzysk energii na cykl w strefie
+    "rest_target": 1.0,                # energia, przy której agent wstaje
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
     "kin_export": False,               # family_timeseries.csv
@@ -214,6 +226,19 @@ GUI_PARAMETERS = [
         ("kin_matching_prob", "α: dobór krewnych (well_mixed)"),
         ("kin_matching_mode", "Dobór α: rodzina / strategia"),
         ("fitness_mode", "Dopasowanie"), ("inclusive_variant", "Wariant inclusive"),
+    ]),
+    ("Moduł 4 – strefy odpoczynku", [
+        ("rest_on", "Strefy odpoczynku i zmęczenie"),
+        ("rest_zone_count", "Liczba stref"),
+        ("rest_zone_placement", "Rozmieszczenie stref"),
+        ("frail_share", "Udział osób starszych / schorowanych"),
+        ("fatigue_regular_mean", "Zmęczenie na 100 m – zwykli (średnia)"),
+        ("fatigue_regular_sd", "Zmęczenie – zwykli (odch. std.)"),
+        ("fatigue_frail_mean", "Zmęczenie na 100 m – starsi (średnia)"),
+        ("fatigue_frail_sd", "Zmęczenie – starsi (odch. std.)"),
+        ("rest_threshold", "Próg energii: szukaj strefy"),
+        ("rest_recovery", "Odzysk energii na cykl"),
+        ("rest_target", "Energia: koniec odpoczynku"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -786,6 +811,12 @@ class Player:
         self.met_count = {}           # metryka: gry z partnerem od początku (zapominanie jej nie rusza)
         self.enc_games = self.enc_rep_rem = self.enc_rep_ever = 0
         self.enc_partners = set()
+        # Moduł 4: energia i zmęczenie (bez wpływu na nic przy rest_on = false)
+        self.energy = 1.0
+        self.fatigue = 0.0            # utrata energii na metr
+        self.frail = False
+        self.resting = False
+        self.rest_cycles = 0
         self.character = character
         self.enemy = None
         self.forgiveness = 0.05
@@ -1138,6 +1169,10 @@ class Player:
         """Wybór następnego węzła - jedno miejsce na tryby ruchu (Faza 5: "schelling")."""
         if self.model.p.movement_mode == "schelling":
             raise ModelError("movement_mode = schelling: do implementacji w Fazie 5.")
+        if self.model.rest_next_hop is not None and self.energy < self.model.p.rest_threshold:
+            hop = self.model.rest_next_hop.get(self.current_node)
+            if hop is not None and hop in candidates:
+                return hop                 # najkrótsza droga do najbliższej strefy
         return self.weighted_next_node(candidates)
 
     def weighted_next_node(self, candidates):
@@ -1236,11 +1271,36 @@ class Player:
                 loc = ((self.location[0] + enemy.location[0]) / 2,
                        (self.location[1] + enemy.location[1]) / 2)
                 g = m.create_game(self, enemy, key, loc)
+                if m.rest_next_hop is not None and (self.resting or enemy.resting):
+                    m.rest_games += 1
                 if P.pair_cooldown > 0:
                     m.active_pairs[key] = g
 
+    def reflex_rest(self):
+        """Moduł 4: True = agent odpoczywa w tym cyklu (stoi i odzyskuje energię, ale gra z sąsiadami)."""
+        P, m = self.model.p, self.model
+        if self.resting:
+            self.energy = min(P.rest_target, self.energy + P.rest_recovery)
+            self.rest_cycles += 1
+            if self.energy >= P.rest_target:
+                self.resting = False
+            return self.resting
+        if (self.energy < P.rest_threshold and self.current_node in m.rest_zone_set
+                and (self.target_node is None or self._at_target())):
+            self.resting = True
+            self.rest_cycles += 1
+            m.rest_bouts += 1
+            return True
+        return False
+
     def step(self):
         P = self.model.p
+        if self.model.rest_next_hop is not None and self.reflex_rest():
+            if P.unlimited_games or self.height == 0:
+                self.reflex_do_you_wanna_play()
+            return
+        if self.model.rest_next_hop is not None and self.target_node is not None and not self._at_target():
+            self.energy = max(0.0, self.energy - self.fatigue * self.move_speed)
         if P.real_env and not P.well_mixed and (self.target_node is None or self._at_target()):
             self.reflex_choose_target()
         if P.real_env and not P.well_mixed and self.target_node is not None and not self._at_target():
@@ -1308,6 +1368,10 @@ class Model:
         self.kin_last_window = None
         self.timeseries_rows = []     # character_timeseries.csv
         self.compat_rows = []         # compat_results.csv
+        self.rest_next_hop = None     # Moduł 4: węzeł -> następny węzeł w stronę najbliższej strefy
+        self.rest_zones = []
+        self.rest_zone_set = frozenset()
+        self.rest_games = self.rest_bouts = 0
 
         P = self.p
         if geojson is None and P.network_file:
@@ -1381,6 +1445,78 @@ class Model:
                 pl.init_on_network()
         if P.kin_on:
             self._setup_families()
+        if P.rest_on:
+            self._setup_rest_zones()
+
+    def _setup_rest_zones(self):
+        """Moduł 4: strefy odpoczynku w węzłach sieci + zmęczenie z dwóch rozkładów normalnych.
+        Osobny generator (seed przebiegu), więc strategie i położenia startowe są takie same jak bez modułu."""
+        P = self.p
+        if P.rest_zone_placement not in ("dispersed", "central", "peripheral", "random"):
+            raise ModelError("rest_zone_placement: dispersed / central / peripheral / random, nie %s"
+                             % P.rest_zone_placement)
+        if not P.real_env or P.well_mixed:
+            self.warnings.append("Moduł 4 (strefy odpoczynku) działa tylko na sieci - pominięty.")
+            return
+        rng = random.Random(zlib.crc32(("rest-%d" % self.seed).encode()))
+        net = self.network
+        comp = net.largest_component() if P.network_cleanup else [v for v in net.adj if net.adj[v]]
+        nodes = sorted(comp)
+        cx = sum(net.vertices[v][0] for v in nodes) / len(nodes)
+        cy = sum(net.vertices[v][1] for v in nodes) / len(nodes)
+        r = {v: _dist(net.vertices[v], (cx, cy)) for v in nodes}
+        rmax = max(r.values()) or 1.0
+        pool = {"central": [v for v in nodes if r[v] <= 0.35 * rmax],
+                "peripheral": [v for v in nodes if r[v] >= 0.75 * rmax]}.get(P.rest_zone_placement, nodes)
+        k = max(1, min(int(P.rest_zone_count), len(pool)))
+        if P.rest_zone_placement == "random":
+            zones = rng.sample(pool, k)
+        else:                          # najdalszy punkt: strefy równomiernie w obrębie puli
+            zones = [rng.choice(pool)]
+            d = {v: _dist(net.vertices[v], net.vertices[zones[0]]) for v in pool}
+            while len(zones) < k:
+                nxt = max(pool, key=lambda v: (d[v], -v))
+                zones.append(nxt)
+                for v in pool:
+                    d[v] = min(d[v], _dist(net.vertices[v], net.vertices[nxt]))
+        self.rest_zones = zones
+        self.rest_zone_set = frozenset(zones)
+        self.rest_next_hop = self._next_hop_to(zones)
+        for p in self.players:
+            p.frail = rng.random() < P.frail_share
+            mu, sd = ((P.fatigue_frail_mean, P.fatigue_frail_sd) if p.frail
+                      else (P.fatigue_regular_mean, P.fatigue_regular_sd))
+            p.fatigue = max(0.005, rng.gauss(mu, sd)) / 100.0     # na metr
+            p.energy = rng.uniform(P.rest_threshold, 1.0)         # różny stan na starcie
+
+    def _next_hop_to(self, targets):
+        """Dijkstra z wielu źródeł po długościach krawędzi: dla każdego węzła sąsiad bliżej najbliższej strefy."""
+        import heapq
+        net = self.network
+        dist = {t: 0.0 for t in targets}
+        hop = {}
+        heap = [(0.0, t) for t in targets]
+        heapq.heapify(heap)
+        while heap:
+            dv, v = heapq.heappop(heap)
+            if dv > dist.get(v, math.inf):
+                continue
+            for u, pl in net.adj[v].items():
+                du = dv + _polyline_length(pl)
+                if du < dist.get(u, math.inf):
+                    dist[u] = du
+                    hop[u] = v
+                    heapq.heappush(heap, (du, u))
+        return hop
+
+    def rest_metrics(self):
+        """Udział agento-cykli w odpoczynku, udział gier z udziałem odpoczywającego, liczba odpoczynków."""
+        if self.rest_next_hop is None:
+            return ["n/a"] * 4
+        rc = sum(p.rest_cycles for p in self.players)
+        return [rc / max(1, self.cycle * len(self.players)), self.rest_games / max(1, self.nb_game),
+                self.rest_bouts / max(1, len(self.players)),
+                sum(p.frail for p in self.players) / max(1, len(self.players))]
 
     def _setup_families(self):
         """Rodziny: losowy podział na grupy family_size; korelacja strategii i skupienie przestrzenne."""
@@ -1659,7 +1795,9 @@ class Model:
                if (self.net_stats and not P.well_mixed) else ["n/a"] * (1 + len(NET_STAT_KEYS)))
             + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct]
             + ["n/a" if (P.well_mixed or not P.real_env) else self.network.edges_removed]
-            + self._kin_columns())
+            + self._kin_columns()
+            + [P.rest_on, P.rest_zone_count if P.rest_on else "n/a",
+               P.rest_zone_placement if P.rest_on else "n/a"] + self.rest_metrics())
 
     def _kin_columns(self):
         P = self.p
@@ -1883,9 +2021,11 @@ class Model:
                 "h": self.normalized_visual_height(p, heights), "fc": p.for_chart,
                 "score": p.score, "games": p.nb_games, "known": len(p.known_others),
                 "links": links(p) if P.show_social_links else [],
+                "rest": p.resting, "frail": p.frail, "energy": round(p.energy, 3),
             })
         return json.dumps({
             "cycle": self.cycle, "w": self.width, "h": self.height,
+            "rest_zones": [list(self.network.vertices[z]) for z in self.rest_zones],
             "cols": P.grid_cols, "rows": P.grid_rows,
             "sel": P.selected_index if sel is not None else -1,
             "sel_ch": sel.character if sel is not None else None,
@@ -1929,7 +2069,9 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "d_share", "exploit_last_window", "payoff_ALLD", "payoff_TFT", "payoff_all", "known_partners",
                  "distinct_partners", "games_per_partner", "exceeding_dunbar", "fixated", "stabilized", "alld_trend_10k",
                  "nb_character_changes", "network_variant"] + NET_STAT_KEYS + [
-                 "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"] + KIN_HEADER
+                 "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"] + KIN_HEADER + [
+                 "rest_on", "rest_zone_count", "rest_zone_placement", "rest_time_share", "rest_games_share",
+                 "rest_bouts_per_agent", "frail_share_realised"]
 
 CSV_HEADERS = {
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
@@ -2113,6 +2255,22 @@ BATCH_EXPERIMENTS["PM9_full_N500"] = dict(
            "player_speed": [0.1, 2.0], "compat_N": [500]},
     params=dict(_PM, variant_name="PM9_full_N500", prediction="S2", compat_mix="equal", evolution_on=True,
                 well_mixed=False, end_cycle=100000, compat_N=500, timeseries_export=False))
+
+
+# Moduł 4 (pilotaż): strefy odpoczynku przy wysokiej mobilności (prędkość 2 - mało gier na partnera bez stref);
+# PM10_rest_off to ta sama konfiguracja bez modułu (te same seedy - porównanie w parach)
+_REST = dict(_PM, prediction="P1P2", compat_mix="equal", evolution_on=True, mutation_rate=0.01, well_mixed=False,
+             end_cycle=100000, player_speed=2.0, timeseries_export=False,
+             synthetic_grid=32)   # park dla N = 200 jak w stage1.py (park_grid_for(200)); bez tego 10 x 10
+BATCH_EXPERIMENTS["PM10_rest_off"] = dict(
+    repeat=3, until="end_cycle", seed=20261123,
+    among={"payoff_preset": ["PD_classic", "snowdrift"], "compat_N": [200]},
+    params=dict(_REST, variant_name="PM10_rest_off", rest_on=False))
+BATCH_EXPERIMENTS["PM10_rest_on"] = dict(
+    repeat=3, until="end_cycle", seed=20261123,
+    among={"payoff_preset": ["PD_classic", "snowdrift"], "rest_zone_placement": ["dispersed", "central", "peripheral"],
+           "rest_zone_count": [5, 10, 20], "compat_N": [200]},
+    params=dict(_REST, variant_name="PM10_rest_on", rest_on=True))
 
 
 def park_grid_for(n_agents):
@@ -2989,6 +3147,109 @@ def t_smoke_full_run():
     assert m.nb_game > 0 and len(m.ablation_rows) == 1
     assert all(len(p.known_others) <= 3 for p in m.players)
     json.loads(m.snapshot())
+
+
+def _rest_model(**kw):
+    base = dict(compat_core=True, compat_N=200, compat_mix="equal", network_cleanup=True, synthetic_grid=32,
+                vision_radius=30, player_speed=2.0, log_games=False, rest_on=True)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def t_rest_off_is_inert():
+    m = _rest_model(rest_on=False)
+    assert m.rest_next_hop is None and not m.rest_zones
+    assert all(p.energy == 1.0 and p.fatigue == 0.0 and not p.frail for p in m.players)
+    m.run(50)
+    assert all(p.energy == 1.0 and not p.resting for p in m.players) and m.rest_games == 0
+
+
+def t_rest_same_population_with_and_without():
+    # osobny generator modułu: te same strategie i węzły startowe przy tym samym seedzie
+    a = Model(Params(compat_core=True, compat_N=200, network_cleanup=True, synthetic_grid=32), seed=7)
+    b = Model(Params(compat_core=True, compat_N=200, network_cleanup=True, synthetic_grid=32, rest_on=True), seed=7)
+    assert [(p.character, p.current_node) for p in a.players] == [(p.character, p.current_node) for p in b.players]
+
+
+def t_rest_two_fatigue_groups():
+    m = _rest_model(compat_N=1000, synthetic_grid=70)
+    frail = [p.fatigue * 100 for p in m.players if p.frail]
+    reg = [p.fatigue * 100 for p in m.players if not p.frail]
+    assert abs(len(frail) / 1000 - 0.2) < 0.04
+    assert abs(sum(reg) / len(reg) - 0.07) < 0.003 and abs(sum(frail) / len(frail) - 0.2) < 0.01
+    assert min(frail + reg) >= 0.005
+
+
+def t_rest_next_hop_reaches_zone():
+    m = _rest_model()
+    for v in m.network.largest_component():
+        steps = 0
+        while v not in m.rest_zone_set:
+            v = m.rest_next_hop[v]
+            steps += 1
+            assert steps < 10000
+    assert len(m.rest_zones) == 10 and len(m.rest_zone_set) == 10
+
+
+def t_rest_placement():
+    net_c = _rest_model(rest_zone_placement="central")
+    net_p = _rest_model(rest_zone_placement="peripheral")
+    comp = net_c.network.largest_component()
+    cx = sum(net_c.network.vertices[v][0] for v in comp) / len(comp)
+    cy = sum(net_c.network.vertices[v][1] for v in comp) / len(comp)
+    mean_r = lambda m: sum(_dist(m.network.vertices[z], (cx, cy)) for z in m.rest_zones) / len(m.rest_zones)
+    assert mean_r(net_c) < 0.5 * mean_r(net_p)
+    try:
+        _rest_model(rest_zone_placement="nowhere")
+        assert False, "brak błędu dla złego rozmieszczenia"
+    except ModelError:
+        pass
+
+
+def t_rest_tired_agent_walks_to_zone_and_recovers():
+    m = _rest_model()
+    p = m.players[0]
+    for q in m.players[1:]:
+        q.energy, q.fatigue = 1.0, 0.0          # reszta się nie męczy
+    p.energy, p.fatigue = 0.1, 0.0
+    for _ in range(20000):
+        m.step()
+        if p.resting:
+            break
+    assert p.resting and p.current_node in m.rest_zone_set and m.rest_bouts == 1
+    loc = p.location
+    e0 = p.energy
+    m.step()
+    assert p.location == loc and abs(p.energy - (e0 + m.p.rest_recovery)) < 1e-9
+    for _ in range(1000):
+        m.step()
+        if not p.resting:
+            break
+    assert not p.resting and p.energy >= m.p.rest_target
+
+
+def t_rest_energy_falls_with_distance():
+    m = _rest_model()
+    p = m.players[0]
+    p.energy, p.fatigue = 1.0, 0.001
+    m.step()
+    m.step()
+    assert abs(p.energy - (1.0 - 0.001 * 2.0)) < 1e-9 or abs(p.energy - (1.0 - 0.001 * 4.0)) < 1e-9
+
+
+def t_rest_games_counted():
+    m = _rest_model(player_speed=0.5, fatigue_regular_mean=2.0, fatigue_frail_mean=4.0, rest_recovery=0.0005)
+    m.run(3000)
+    rt, rg, bouts, fr = m.rest_metrics()
+    assert rt > 0.2 and rg > 0.2 and bouts > 0.5 and 0.1 < fr < 0.3
+    row_m = _rest_model(compat_export=True, end_cycle=200)
+    row_m.run(201)
+    assert len(row_m.compat_rows[0]) == len(COMPAT_HEADER)
+
+
+def t_rest_ignored_when_well_mixed():
+    m = _rest_model(well_mixed=True)
+    assert m.rest_next_hop is None and any("Moduł 4" in w for w in m.warnings)
 
 
 TESTS = [(name[2:], fn) for name, fn in sorted(globals().items()) if name.startswith("t_") and callable(fn)]
