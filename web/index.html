@@ -61,6 +61,9 @@ header.top {
 header.top p { margin: 0; color: var(--muted); max-width: 70ch; }
 .status { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
 .status b { color: var(--ink); font-weight: 500; }
+.lang { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.lang button { border: 0; background: transparent; padding: 3px 9px; cursor: pointer; font-family: var(--font-label); font-weight: 500; font-size: 12px; color: var(--muted); }
+.lang button[aria-pressed="true"] { background: var(--ink); color: var(--ground); }
 
 nav.tabs { display: flex; gap: 4px; padding-block: 10px; flex-wrap: wrap; }
 nav.tabs button {
@@ -134,6 +137,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script src="i18n.js"></script>
 </head>
 <body>
 
@@ -141,7 +145,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   <div class="box">
     <h2>Ładowanie Pythona (Pyodide)…</h2>
     <progress id="loadBar"></progress>
-    <p class="hint" id="loadMsg">Pierwsze uruchomienie pobiera ok. 10 MB, potem przeglądarka trzyma to w pamięci podręcznej.</p>
+    <p class="hint" id="loadMsg" data-noi18n>Pierwsze uruchomienie pobiera ok. 10 MB, potem przeglądarka trzyma to w pamięci podręcznej.</p>
     <div id="loadPick" hidden>
       <p class="hint">Nie udało się wczytać <code>sipd.py</code> obok strony (strona otwarta jako plik?). Wskaż plik ręcznie albo uruchom <code>python -m http.server</code> w katalogu <code>web/</code>.</p>
       <input type="file" id="pySrcFile" accept=".py">
@@ -152,7 +156,10 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 <header class="top">
   <h1>SIPD – przestrzenny dylemat więźnia</h1>
   <p>Port modelu <code>PD.gaml</code> do Pythona, uruchamiany w przeglądarce. Parametry z oznaczeniem ↻ działają po ponownej inicjalizacji.</p>
-  <div class="status" id="status">cykl <b id="stCycle">–</b> · gier <b id="stGames">–</b> · sieć <b id="stNet">–</b></div>
+  <div class="status" id="status"><span>cykl</span> <b id="stCycle">–</b> · <span>gier</span> <b id="stGames">–</b> · <span>sieć</span> <b id="stNet">–</b></div>
+  <div class="lang" role="group" aria-label="Język / Language">
+    <button type="button" data-lang="pl" lang="pl">PL</button><button type="button" data-lang="en" lang="en">EN</button>
+  </div>
 </header>
 
 <nav class="tabs" role="tablist">
@@ -167,7 +174,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   <aside class="params">
     <div class="controls">
       <button class="btn primary" id="btnInit">Inicjalizuj</button>
-      <button class="btn" id="btnRun" disabled>Start</button>
+      <button class="btn" id="btnRun" data-noi18n disabled>Start</button>
       <button class="btn" id="btnStep" disabled>Krok</button>
     </div>
     <div class="field"><label for="speed">Cykli na klatkę</label>
@@ -178,7 +185,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <select id="preset"><option value="">—</option></select></div>
     <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
       <input type="file" id="geoFile" accept=".geojson,.json"></div>
-    <p class="hint" id="geoInfo">Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
+    <p class="hint" id="geoInfo" data-noi18n>Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
     <div id="paramForm"></div>
   </aside>
 
@@ -197,7 +204,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <canvas class="map" id="mapMain" width="720" height="720"></canvas>
       </figure>
       <figure class="display">
-        <figcaption><h3 id="memTitle">agent_memory</h3><span class="hint">kliknij agenta na mapie, żeby go wybrać</span></figcaption>
+        <figcaption><h3 id="memTitle" data-noi18n>agent_memory</h3><span class="hint">kliknij agenta na mapie, żeby go wybrać</span></figcaption>
         <canvas class="map" id="mapMem" width="720" height="720"></canvas>
       </figure>
     </div>
@@ -233,13 +240,13 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <div class="field"><label for="bExp">Eksperyment</label><select id="bExp"></select></div>
       <div class="field"><label for="bRepeat">Powtórzenia</label><input type="number" id="bRepeat" min="1" value="3"></div>
       <div class="field"><label for="bEnd">end_cycle</label><input type="number" id="bEnd" min="1" value="2000"></div>
-      <div class="field"><label for="bSeed">Seed eksperymentu</label><input type="text" id="bSeed" placeholder="z eksperymentu"></div>
+      <div class="field"><label for="bSeed">Seed eksperymentu</label><input type="text" id="bSeed" placeholder="z eksperymentu" data-noi18n></div>
       <button class="btn primary" id="bRun">Uruchom</button>
       <button class="btn" id="bStop" disabled>Zatrzymaj</button>
     </div>
     <p class="hint" id="bSpec"></p>
     <progress id="bProg" value="0" max="1"></progress>
-    <p class="hint mono" id="bProgTxt">—</p>
+    <p class="hint mono" id="bProgTxt" data-noi18n>—</p>
     <div class="table-wrap" id="bSummary"></div>
     <div class="table-wrap" id="bTable"></div>
     <div class="controls" id="bDownloads"></div>
@@ -291,6 +298,7 @@ let batchStop = false;
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+I18N.init(I18N_EN);
 
 function showMsg(text, kind = "") {
   const box = $("messages");
@@ -303,10 +311,11 @@ function showMsg(text, kind = "") {
 // ---------- ładowanie Pyodide + sipd.py ----------
 async function boot() {
   try {
-    $("loadMsg").textContent = "Pobieranie interpretera Pythona…";
+    $("loadMsg").textContent = L("Pobieranie interpretera Pythona…", "Downloading the Python interpreter…");
     py = await loadPyodide();
   } catch (e) {
-    $("loadMsg").textContent = "Nie udało się pobrać Pyodide: " + e.message + ". Sprawdź połączenie z internetem.";
+    $("loadMsg").textContent = L("Nie udało się pobrać Pyodide: ", "Could not download Pyodide: ") + e.message +
+      L(". Sprawdź połączenie z internetem.", ". Check your internet connection.");
     return;
   }
   let src = null;
@@ -419,13 +428,14 @@ function buildForm() {
   cats.forEach(([name, items], i) => {
     const d = document.createElement("details");
     d.className = "cat"; d.open = i < 2;
-    const s = document.createElement("summary"); s.textContent = name; d.append(s);
+    const s = document.createElement("summary"); s.dataset.pl = name; s.textContent = L(name, I18N_CAT_EN[name] || name); d.append(s);
     const f = document.createElement("div"); f.className = "fields";
     items.forEach(([key, label]) => {
       if (shown.has(key)) return; shown.add(key);
       const row = document.createElement("div");
       row.className = "field" + (RESTART_KEYS.has(key) ? " restart" : "");
-      const lab = document.createElement("label"); lab.htmlFor = "p_" + key; lab.textContent = label;
+      const lab = document.createElement("label"); lab.htmlFor = "p_" + key;
+      lab.dataset.pl = label; lab.dataset.key = key; lab.textContent = L(label, I18N_PARAM_EN[key] || label);
       row.append(lab, inputFor(key));
       f.append(row);
     });
@@ -442,7 +452,7 @@ function applyPreset(name) {
   Object.entries(e.among || {}).forEach(([k, vals]) => setInput($("p_" + k), vals[0]));
   setInput($("p_log_games"), true);
   if (e.until === "end_cycle") setInput($("p_end_cycle"), DEFAULTS.end_cycle);
-  showMsg("Wczytano ustawienia " + name + ". Kliknij Inicjalizuj.", "warn");
+  showMsg(L("Wczytano ustawienia ", "Loaded the settings of ") + name + L(". Kliknij Inicjalizuj.", ". Click Initialise."), "warn");
 }
 function loadDemoPreset() {
   // stan startowy strony: mieszanka wszystkich charakterów, żeby od razu było co oglądać
@@ -453,7 +463,10 @@ function loadDemoPreset() {
 }
 function onParamChange(key) {
   if (!hasModel) return;
-  if (RESTART_KEYS.has(key)) { showMsg("Zmiana „" + key + "” zadziała po kliknięciu Inicjalizuj.", "warn"); return; }
+  if (RESTART_KEYS.has(key)) {
+    showMsg(L("Zmiana „", "The change to “") + key + L("” zadziała po kliknięciu Inicjalizuj.", "” takes effect after clicking Initialise."), "warn");
+    return;
+  }
   py.globals.get("_set")(key, JSON.stringify(readInput(key)));
   if (snap) redraw();
 }
@@ -467,7 +480,8 @@ function initModel() {
     const res = JSON.parse(py.globals.get("_new_model")(JSON.stringify(readParams()), seed));
     net = res.network;
     hasModel = true;
-    $("stNet").textContent = net.source === "geojson" ? "GeoJSON" : (readInput("real_env") ? "syntetyczna" : "sztuczny świat");
+    netKind = net.source === "geojson" ? "geojson" : (readInput("real_env") ? "synthetic" : "artificial");
+    renderNet();
     if (res.warnings.length) showMsg(res.warnings.join(" "), "warn"); else $("messages").replaceChildren();
   } catch (e) {
     hasModel = false;
@@ -504,8 +518,8 @@ function loop() {
     requestAnimationFrame(loop);
   }
 }
-function start() { if (!hasModel) return; running = true; $("btnRun").textContent = "Pauza"; requestAnimationFrame(loop); }
-function stop() { running = false; $("btnRun").textContent = "Start"; }
+function start() { if (!hasModel) return; running = true; runLabel(); requestAnimationFrame(loop); }
+function stop() { running = false; runLabel(); }
 
 // ---------- rysowanie ----------
 function fit(canvas) {
@@ -573,17 +587,21 @@ function redraw() {
   drawMap($("mapMem"), "personal");
   $("memTitle").textContent = "agent_memory – agent #" + snap.sel + (snap.sel_ch ? " (" + snap.sel_ch + ")" : "");
   $("stCycle").textContent = snap.cycle; $("stGames").textContent = snap.nb_game;
+  renderStats();
+}
+function renderStats() {
+  if (!snap) return;
   const tot = snap.moves_C + snap.moves_D;
   const stats = [
-    ["agentów", snap.players.length],
-    ["gier", snap.nb_game],
-    ["udział D", tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
-    ["gier z wyzyskiem", (100 * snap.exploit).toFixed(1) + "%"],
-    ["zmian charakteru", snap.changes],
-    ["spotkań z pamiętanym", (100 * snap.enc_rem).toFixed(1) + "%"],
-    ["znanych partnerów", snap.known.toFixed(2)],
-    ["różnych w oknie", snap.distinct.toFixed(2)],
-    ["zapomnień/cykl", snap.forgets],
+    [L("agentów", "agents"), snap.players.length],
+    [L("gier", "games"), snap.nb_game],
+    [L("udział D", "share of D"), tot ? (100 * snap.moves_D / tot).toFixed(1) + "%" : "–"],
+    [L("gier z wyzyskiem", "games with exploitation"), (100 * snap.exploit).toFixed(1) + "%"],
+    [L("zmian charakteru", "character changes"), snap.changes],
+    [L("spotkań z pamiętanym", "encounters with a remembered partner"), (100 * snap.enc_rem).toFixed(1) + "%"],
+    [L("znanych partnerów", "known partners"), snap.known.toFixed(2)],
+    [L("różnych w oknie", "distinct in window"), snap.distinct.toFixed(2)],
+    [L("zapomnień/cykl", "forgettings/cycle"), snap.forgets],
   ];
   $("stats").replaceChildren(...stats.map(([k, v]) => {
     const d = document.createElement("div"); d.className = "stat";
@@ -619,7 +637,7 @@ function chartOpts(legend) {
   return {
     animation: false, responsive: true, maintainAspectRatio: false, parsing: false, normalized: true,
     plugins: { legend: { display: legend, labels: { color: ink, boxWidth: 10, font: { size: 11 } } } },
-    scales: { x: { type: "linear", ticks: { color: ink }, grid: { color: grid }, title: { display: true, text: "cykl", color: ink } },
+    scales: { x: { type: "linear", ticks: { color: ink }, grid: { color: grid }, title: { display: true, text: L("cykl", "cycle"), color: ink } },
               y: { ticks: { color: ink }, grid: { color: grid } } },
     elements: { point: { radius: 0 }, line: { borderWidth: 1.5 } },
   };
@@ -632,9 +650,9 @@ function resetCharts() {
   if (typeof Chart === "undefined") return;
   chartScore = new Chart($("chartScore"), { type: "line", data: { datasets: [] }, options: chartOpts(false) });
   chartDunbar = new Chart($("chartDunbar"), { type: "line", data: { datasets: [
-    { label: "średnio znanych partnerów", data: [], borderColor: css("--park") },
-    { label: "różni partnerzy w oknie", data: [], borderColor: css("--accent") },
-    { label: "zapomnienia / cykl", data: [], borderColor: css("--bad") },
+    { label: DUNBAR_LABELS[0](), data: [], borderColor: css("--park") },
+    { label: DUNBAR_LABELS[1](), data: [], borderColor: css("--accent") },
+    { label: DUNBAR_LABELS[2](), data: [], borderColor: css("--bad") },
   ] }, options: chartOpts(true) });
   chartShares = new Chart($("chartShares"), { type: "line", data: { datasets: Object.keys(COLORS).map((c) => (
     { label: c, data: [], borderColor: COLORS[c] })) }, options: chartOpts(true) });
@@ -678,13 +696,8 @@ function buildBatch() {
   Object.keys(EXPS).forEach((k) => sel.add(new Option(k, k)));
   const describe = () => {
     const e = EXPS[sel.value];
-    const shown = Object.entries(e.params).filter(([k]) => !["variant_name", "log_games"].includes(k))
-      .map(([k, v]) => k + "=" + v).join(", ");
-    const among = Object.entries(e.among || {}).map(([k, v]) => k + " ∈ {" + v.join(", ") + "}").join("; ");
-    $("bSpec").textContent = "Oryginał: repeat " + e.repeat + ", until cycle > " + e.until +
-      (e.seed ? ", seed " + e.seed : "") + ". Parametry: " + shown + (among ? ". Kombinacje: " + among : "") + ".";
+    renderSpec();
     $("bEnd").value = e.until === "regression_cycle" ? (e.params.regression_cycle || 2000) : 2000;
-    $("bSeed").placeholder = e.seed ? String(e.seed) : "losowy";
   };
   sel.addEventListener("change", describe); describe();
   $("bRun").addEventListener("click", runBatch);
@@ -712,12 +725,12 @@ async function runBatch() {
     catch (e) { $("bProgTxt").textContent = pyError(e); break; }
     const pr = JSON.parse(py.runPython("B.progress()"));
     $("bProg").max = pr.total; $("bProg").value = pr.done + (pr.limit ? pr.cycle / (pr.limit + 1) : 0);
-    $("bProgTxt").textContent = "przebieg " + Math.min(pr.done + 1, pr.total) + " / " + pr.total +
-      " · cykl " + pr.cycle + " / " + pr.limit + " · " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
+    $("bProgTxt").textContent = L("przebieg ", "run ") + Math.min(pr.done + 1, pr.total) + " / " + pr.total +
+      L(" · cykl ", " · cycle ") + pr.cycle + " / " + pr.limit + " · " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
     await new Promise((r) => setTimeout(r, 0));
   }
   $("bRun").disabled = false; $("bStop").disabled = true;
-  if (batchStop) $("bProgTxt").textContent += " · zatrzymano";
+  if (batchStop) $("bProgTxt").textContent += L(" · zatrzymano", " · stopped");
   showBatchResults();
 }
 function table(headers, rows, numericFrom = 1) {
@@ -756,11 +769,12 @@ function showBatchResults() {
     const cols = data.head.slice(1);
     const mean = cols.map((_, j) => data.rows.reduce((s, r) => s + r[j + 1], 0) / data.rows.length);
     const sd = cols.map((_, j) => Math.sqrt(data.rows.reduce((s, r) => s + (r[j + 1] - mean[j]) ** 2, 0) / Math.max(1, data.rows.length - 1)));
-    const h = document.createElement("h3"); h.textContent = "Średnia ± odchylenie (" + data.rows.length + " przebiegów)";
-    $("bSummary").replaceChildren(h, table(["", ...cols], [["średnia", ...mean], ["odch. std.", ...sd]]));
+    const h = document.createElement("h3");
+    h.textContent = L("Średnia ± odchylenie (", "Mean ± SD (") + data.rows.length + L(" przebiegów)", " runs)");
+    $("bSummary").replaceChildren(h, table(["", ...cols], [[L("średnia", "mean"), ...mean], [L("odch. std.", "SD"), ...sd]]));
   }
   $("bTable").replaceChildren(table(data.head, data.rows));
-  const b = document.createElement("button"); b.className = "btn"; b.textContent = "Pobierz " + fname;
+  const b = document.createElement("button"); b.className = "btn"; b.textContent = L("Pobierz ", "Download ") + fname;
   b.addEventListener("click", () => download(fname, py.globals.get("_batch_csv")(fname)));
   $("bDownloads").replaceChildren(b);
 }
@@ -769,13 +783,13 @@ function showBatchResults() {
 function runTests() {
   const res = JSON.parse(py.runPython("sipd.run_self_tests_json()"));
   const ok = res.filter((r) => r.ok).length;
-  $("tSummary").textContent = ok + " / " + res.length + " testów przeszło";
-  const t = table(["test", "wynik", "szczegóły"], []);
+  $("tSummary").textContent = ok + " / " + res.length + L(" testów przeszło", " tests passed");
+  const t = table(["test", L("wynik", "result"), L("szczegóły", "details")], []);
   const tb = t.querySelector("tbody");
   res.forEach((r) => {
     const tr = document.createElement("tr");
     const a = document.createElement("td"); a.className = "mono"; a.textContent = r.name;
-    const b = document.createElement("td"); b.className = r.ok ? "ok" : "fail"; b.textContent = r.ok ? "OK" : "BŁĄD";
+    const b = document.createElement("td"); b.className = r.ok ? "ok" : "fail"; b.textContent = r.ok ? "OK" : L("BŁĄD", "FAIL");
     const c = document.createElement("td"); c.textContent = r.msg;
     tr.append(a, b, c); tb.append(tr);
   });
@@ -799,10 +813,56 @@ $("geoFile").addEventListener("change", async (ev) => {
   py.globals.set("_geo_text", await f.text());
   try {
     const info = JSON.parse(py.runPython("sipd.PathNetwork.from_geojson(_geo_text); GEO = _geo_text; json.dumps({'ok': True})"));
-    if (info.ok) $("geoInfo").textContent = "Wczytano " + f.name + ". Kliknij Inicjalizuj.";
-  } catch (e) { $("geoInfo").textContent = "Błąd pliku " + f.name + ": " + pyError(e); }
+    if (info.ok) { geoState = null; $("geoInfo").textContent = L("Wczytano ", "Loaded ") + f.name + L(". Kliknij Inicjalizuj.", ". Click Initialise."); }
+  } catch (e) { geoState = null; $("geoInfo").textContent = L("Błąd pliku ", "Error in file ") + f.name + ": " + pyError(e); }
 });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redraw(); });
+// ---------- język ----------
+let netKind = null, geoState = "default";
+const DUNBAR_LABELS = [() => L("średnio znanych partnerów", "mean known partners"),
+  () => L("różni partnerzy w oknie", "distinct partners in window"), () => L("zapomnienia / cykl", "forgettings / cycle")];
+
+function runLabel() { $("btnRun").textContent = running ? L("Pauza", "Pause") : L("Start", "Run"); }
+
+function renderNet() {
+  if (!netKind) return;
+  $("stNet").textContent = netKind === "geojson" ? "GeoJSON"
+    : netKind === "synthetic" ? L("syntetyczna", "synthetic") : L("sztuczny świat", "artificial world");
+}
+
+function renderSpec() {
+  const e = EXPS[$("bExp").value];
+  if (!e) return;
+  const shown = Object.entries(e.params).filter(([k]) => !["variant_name", "log_games"].includes(k))
+    .map(([k, v]) => k + "=" + v).join(", ");
+  const among = Object.entries(e.among || {}).map(([k, v]) => k + " ∈ {" + v.join(", ") + "}").join("; ");
+  $("bSpec").textContent = L("Oryginał: repeat ", "Original: repeat ") + e.repeat + ", until cycle > " + e.until +
+    (e.seed ? ", seed " + e.seed : "") + L(". Parametry: ", ". Parameters: ") + shown +
+    (among ? L(". Kombinacje: ", ". Combinations: ") + among : "") + ".";
+  $("bSeed").placeholder = e.seed ? String(e.seed) : L("losowy", "random");
+}
+
+function renderGeoInfo() {
+  if (geoState !== "default") return;
+  $("geoInfo").innerHTML = L(
+    "Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.",
+    "No file – a synthetic park network will be used. Load <code>includes/gis/drogi.geojson</code> to reproduce the park.");
+}
+
+I18N.onChange(() => {
+  document.querySelectorAll("#paramForm summary").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_CAT_EN[el.dataset.pl] || el.dataset.pl); });
+  document.querySelectorAll("#paramForm label[data-key]").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_PARAM_EN[el.dataset.key] || el.dataset.pl); });
+  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo();
+  for (const ch of [chartScore, chartDunbar, chartShares]) {
+    if (!ch) continue;
+    ch.options.scales.x.title.text = L("cykl", "cycle");
+    if (ch === chartDunbar) ch.data.datasets.forEach((ds, i) => { ds.label = DUNBAR_LABELS[i](); });
+    ch.update("none");
+  }
+});
+renderGeoInfo();
+runLabel();
+
 buildSimDownloads();
 boot();
 </script>
