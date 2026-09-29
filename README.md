@@ -10,6 +10,8 @@ Spatial iterated prisoner dillema
 - `web/index.html` – uruchamia `sipd.py` w przeglądarce (Pyodide): mapa, pamięć agenta, wykresy,
   batch, testy i pobieranie CSV. Otwórz przez serwer HTTP, np. `cd web && python -m http.server`,
   potem `http://localhost:8000`, albo opublikuj katalog `web/` przez GitHub Pages.
+  Interfejs jest po polsku i po angielsku: przełącznik PL/EN w nagłówku, wybór zapamiętuje przeglądarka;
+  `?lang=en` albo `?lang=pl` w adresie wymusza język. Teksty angielskie są w `web/i18n.js`.
 
 Wyniki zgadzają się z GAMA statystycznie, nie liczba w liczbę (inny generator liczb losowych).
 Bez `drogi.geojson` używana jest syntetyczna sieć parkowa.
