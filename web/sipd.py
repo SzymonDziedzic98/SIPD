@@ -128,6 +128,9 @@ DEFAULTS = {
     "rest_on": False,
     "rest_zone_count": 10,             # liczba stref (węzły sieci z ławkami, placem zabaw itp.)
     "rest_zone_placement": "dispersed",  # "dispersed" | "central" | "peripheral" | "random"
+    # plik GeoJSON z punktami stref (np. ławki i stoły piknikowe z OSM, ten sam układ co sieć);
+    # niepusty = strefy w najbliższych węzłach sieci, rest_zone_count i rest_zone_placement pomijane
+    "rest_zone_file": "",
     "frail_share": 0.2,                # udział osób starszych / schorowanych
     "fatigue_regular_mean": 0.07,      # utrata energii na 100 m (rozkład normalny) - zwykli
     "fatigue_regular_sd": 0.015,
@@ -136,6 +139,12 @@ DEFAULTS = {
     "rest_threshold": 0.3,             # poniżej tej energii agent idzie do najbliższej strefy
     "rest_recovery": 0.005,            # odzysk energii na cykl; przy prędkości 2 daje ok. 25% czasu w strefach
     "rest_target": 1.0,                # energia, przy której agent wstaje
+    # --- Moduł 5: bank odwiedzających (rotacja; domyślnie wyłączony) ---
+    # compat_N = cała pula odwiedzających; w parku średnio bank_present_share z nich, reszta czeka w banku.
+    # Wyjście z parku nie kasuje agenta: zachowuje strategię i całą pamięć partnerów.
+    "bank_on": False,
+    "bank_present_share": 0.25,        # oczekiwany udział puli obecny w parku (stan ustalony)
+    "bank_mean_stay": 1000,            # średnia długość wizyty w cyklach (rozkład geometryczny)
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
     "kin_export": False,               # family_timeseries.csv
@@ -231,6 +240,7 @@ GUI_PARAMETERS = [
         ("rest_on", "Strefy odpoczynku i zmęczenie"),
         ("rest_zone_count", "Liczba stref"),
         ("rest_zone_placement", "Rozmieszczenie stref"),
+        ("rest_zone_file", "Plik stref (GeoJSON, np. ławki z OSM)"),
         ("frail_share", "Udział osób starszych / schorowanych"),
         ("fatigue_regular_mean", "Zmęczenie na 100 m – zwykli (średnia)"),
         ("fatigue_regular_sd", "Zmęczenie – zwykli (odch. std.)"),
@@ -239,6 +249,11 @@ GUI_PARAMETERS = [
         ("rest_threshold", "Próg energii: szukaj strefy"),
         ("rest_recovery", "Odzysk energii na cykl"),
         ("rest_target", "Energia: koniec odpoczynku"),
+    ]),
+    ("Moduł 5 – bank odwiedzających", [
+        ("bank_on", "Rotacja odwiedzających (bank)"),
+        ("bank_present_share", "Udział puli obecny w parku"),
+        ("bank_mean_stay", "Średnia długość wizyty (cykle)"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -299,6 +314,7 @@ class PathNetwork:
         self.polylines = polylines            # do rysowania (path_segment / park_boundary)
         self.drop_loops = drop_loops
         self.edges_removed = 0                # U5: faktycznie usunięte krawędzie (wariant fragmented)
+        self.geo = None                       # przekształcenie GeoJSON -> układ modelu (from_geojson)
         self.vertices = []
         self.adj = {}                         # v -> {u: polilinia v..u (najkrótsza)}
         index = {}
@@ -391,6 +407,7 @@ class PathNetwork:
         net = PathNetwork(polylines, self.width, self.height, self.source + "/" + kind,
                           drop_loops=getattr(self, "drop_loops", False))
         net.edges_removed = removed if kind == "fragmented" else 0
+        net.geo = self.geo
         return net
 
     def stats(self, path_sources=100):
@@ -533,7 +550,30 @@ class PathNetwork:
         minx, maxy = min(xs), max(ys)
         # jak w GAMA: początek układu w rogu obwiedni, oś y w dół (północ u góry)
         lines = [[(x - minx, maxy - y) for x, y in ln] for ln in lines]
-        return cls(lines, max(xs) - minx, maxy - min(ys), "geojson", drop_loops=drop_loops)
+        net = cls(lines, max(xs) - minx, maxy - min(ys), "geojson", drop_loops=drop_loops)
+        net.geo = (geographic, lat0 if geographic else 0.0, minx, maxy)
+        return net
+
+    def to_local(self, x, y):
+        """Punkt z tego samego układu co GeoJSON sieci -> współrzędne modelu (jak w from_geojson)."""
+        if self.geo is None:
+            raise ModelError("Sieć nie pochodzi z GeoJSON - brak przekształcenia współrzędnych.")
+        geographic, lat0, minx, maxy = self.geo
+        if geographic:
+            r = 6371008.8
+            x, y = math.radians(x) * r * math.cos(lat0), math.radians(y) * r
+        return (x - minx, maxy - y)
+
+    def to_geo(self, x, y):
+        """Odwrotność to_local: współrzędne modelu -> układ pliku GeoJSON sieci."""
+        if self.geo is None:
+            raise ModelError("Sieć nie pochodzi z GeoJSON - brak przekształcenia współrzędnych.")
+        geographic, lat0, minx, maxy = self.geo
+        x, y = x + minx, maxy - y
+        if geographic:
+            r = 6371008.8
+            x, y = math.degrees(x / (r * math.cos(lat0))), math.degrees(y / r)
+        return (x, y)
 
     @classmethod
     def synthetic(cls, seed=12345, n=10, spacing=60.0):
@@ -817,6 +857,10 @@ class Player:
         self.frail = False
         self.resting = False
         self.rest_cycles = 0
+        # Moduł 5: obecność w parku (bez wpływu na nic przy bank_on = false)
+        self.in_park = True
+        self.visit_no = 0
+        self.first_met_visit = {}     # partner -> numer mojej wizyty, w której go poznałem
         self.character = character
         self.enemy = None
         self.forgiveness = 0.05
@@ -946,7 +990,7 @@ class Player:
             if rel:
                 return m.rng.choice(rel)
         if m.p.well_mixed:
-            pool = [q for q in m.players if q is not self]
+            pool = [q for q in m.players if q is not self and q.in_park]
         else:
             pool = m.players_within(self, m.p.vision_radius)
         return m.rng.choice(pool) if pool else None
@@ -1258,7 +1302,7 @@ class Player:
             if not nearby:
                 nearby = [q for q in m.players if q is not self]
         elif P.well_mixed:
-            nearby = [q for q in m.players if q is not self]
+            nearby = [q for q in m.players if q is not self and q.in_park]
         else:
             nearby = m.players_within(self, P.vision_radius)
         if not nearby:
@@ -1372,6 +1416,12 @@ class Model:
         self.rest_zones = []
         self.rest_zone_set = frozenset()
         self.rest_games = self.rest_bouts = 0
+        self.bank_rng = None          # Moduł 5: osobny generator rotacji
+        self.bank_nodes = []
+        self.bank_present_sum = 0
+        self.bank_samples = 0
+        self.bank_entries = 0
+        self.bank_games = self.bank_cross_visit = 0
 
         P = self.p
         if geojson is None and P.network_file:
@@ -1447,6 +1497,8 @@ class Model:
             self._setup_families()
         if P.rest_on:
             self._setup_rest_zones()
+        if P.bank_on:
+            self._setup_bank()
 
     def _setup_rest_zones(self):
         """Moduł 4: strefy odpoczynku w węzłach sieci + zmęczenie z dwóch rozkładów normalnych.
@@ -1460,6 +1512,10 @@ class Model:
             return
         rng = random.Random(zlib.crc32(("rest-%d" % self.seed).encode()))
         net = self.network
+        if P.rest_zone_file:
+            zones = self._rest_zones_from_file(P.rest_zone_file)
+            self._finish_rest_setup(zones, rng)
+            return
         comp = net.largest_component() if P.network_cleanup else [v for v in net.adj if net.adj[v]]
         nodes = sorted(comp)
         cx = sum(net.vertices[v][0] for v in nodes) / len(nodes)
@@ -1479,6 +1535,49 @@ class Model:
                 zones.append(nxt)
                 for v in pool:
                     d[v] = min(d[v], _dist(net.vertices[v], net.vertices[nxt]))
+        self._finish_rest_setup(zones, rng)
+
+    def rest_zones_geojson(self):
+        """Bieżące strefy odpoczynku (węzły sieci) jako GeoJSON w układzie pliku sieci (albo modelu, gdy sieć syntetyczna)."""
+        net = self.network
+        feats = []
+        for z in self.rest_zones:
+            x, y = net.vertices[z]
+            if net.geo is not None:
+                x, y = net.to_geo(x, y)
+            feats.append({"type": "Feature", "properties": {"layer": "rest_zones", "kind": "model_node", "node": z},
+                          "geometry": {"type": "Point", "coordinates": [x, y]}})
+        return json.dumps({"type": "FeatureCollection", "features": feats})
+
+    def _rest_zones_from_file(self, path):
+        """Punkty (lub środki innych geometrii) z GeoJSON -> najbliższe węzły sieci, bez powtórzeń."""
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        feats = data.get("features", []) if data.get("type") == "FeatureCollection" else [data]
+        zones = []
+        for ft in feats:
+            g = ft.get("geometry") if ft.get("type") == "Feature" else ft
+            if not g:
+                continue
+            pts = []
+
+            def walk(c):
+                if isinstance(c[0], (int, float)):
+                    pts.append(c)
+                else:
+                    for q in c:
+                        walk(q)
+            walk(g["coordinates"])
+            x, y = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+            v = self.network.closest_vertex(self.network.to_local(x, y), largest_only=self.p.network_cleanup)
+            if v is not None and v not in zones:
+                zones.append(v)
+        if not zones:
+            raise ModelError("Plik stref %s nie zawiera żadnego punktu." % path)
+        return zones
+
+    def _finish_rest_setup(self, zones, rng):
+        P = self.p
         self.rest_zones = zones
         self.rest_zone_set = frozenset(zones)
         self.rest_next_hop = self._next_hop_to(zones)
@@ -1488,6 +1587,74 @@ class Model:
                       else (P.fatigue_regular_mean, P.fatigue_regular_sd))
             p.fatigue = max(0.005, rng.gauss(mu, sd)) / 100.0     # na metr
             p.energy = rng.uniform(P.rest_threshold, 1.0)         # różny stan na starcie
+
+    def _setup_bank(self):
+        """Moduł 5: pula compat_N odwiedzających; na starcie w parku losowy udział bank_present_share.
+        Osobny generator (seed przebiegu), więc strategie i węzły startowe są te same z modułem i bez niego."""
+        P = self.p
+        if not (0.0 < P.bank_present_share <= 1.0):
+            raise ModelError("bank_present_share musi być w (0, 1]: %s" % P.bank_present_share)
+        if P.bank_mean_stay < 1:
+            raise ModelError("bank_mean_stay musi być >= 1: %s" % P.bank_mean_stay)
+        if P.kin_on:
+            raise ModelError("Moduł 5 (bank) nie jest jeszcze łączony z Modułem 3 (kin_on).")
+        self.bank_rng = random.Random(zlib.crc32(("bank-%d" % self.seed).encode()))
+        if P.real_env and not P.well_mixed:
+            comp = self.network.largest_component() if P.network_cleanup else [v for v in self.network.adj
+                                                                               if self.network.adj[v]]
+            self.bank_nodes = sorted(comp)
+        k = int(round(P.bank_present_share * len(self.players)))
+        present = set(self.bank_rng.sample(range(len(self.players)), k))
+        for p in self.players:
+            if p.idx in present:
+                p.visit_no = 1
+            else:
+                self._bank_leave(p)
+
+    def _bank_leave(self, p):
+        p.in_park = False
+        p.resting = False
+        p.target_node = None
+        p.path = None
+        p.path_pos = 0.0
+
+    def _bank_enter(self, p):
+        P = self.p
+        p.in_park = True
+        p.visit_no += 1
+        self.bank_entries += 1
+        if self.bank_nodes:                      # wejście w losowym węźle sieci
+            v = self.bank_rng.choice(self.bank_nodes)
+            p.current_node = v
+            p.location = self.network.vertices[v]
+        if self.rest_next_hop is not None:       # po powrocie z domu wypoczęty
+            p.energy = self.bank_rng.uniform(P.rest_threshold, 1.0)
+
+    def _reflex_visitor_bank(self):
+        """Moduł 5: w parku odejście z p = 1/stay; w banku powrót z p dobranym tak, by w stanie
+        ustalonym w parku był udział bank_present_share puli."""
+        P, rng = self.p, self.bank_rng
+        q_leave = 1.0 / P.bank_mean_stay
+        s = P.bank_present_share
+        q_return = 1.0 if s >= 1.0 else min(1.0, q_leave * s / (1.0 - s))
+        for p in self.players:
+            if p.in_park:
+                if s < 1.0 and rng.random() < q_leave:
+                    self._bank_leave(p)
+            elif rng.random() < q_return:
+                self._bank_enter(p)
+        self.bank_present_sum += sum(p.in_park for p in self.players)
+        self.bank_samples += 1
+
+    def bank_metrics(self):
+        """Średni udział puli w parku, wizyty na odwiedzającego, udział gier z partnerem poznanym
+        na wcześniejszej wizycie (z punktu widzenia obu graczy)."""
+        if self.bank_rng is None:
+            return ["n/a"] * 3
+        n = max(1, len(self.players))
+        return [self.bank_present_sum / max(1, self.bank_samples * n),
+                sum(p.visit_no for p in self.players) / n,
+                self.bank_cross_visit / max(1, self.bank_games)]
 
     def _next_hop_to(self, targets):
         """Dijkstra z wielu źródeł po długościach krawędzi: dla każdego węzła sąsiad bliżej najbliższej strefy."""
@@ -1602,7 +1769,7 @@ class Model:
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for q in self._grid.get((kx + dx, ky + dy), ()):
-                    if q is not me and (q._loc[0] - x) ** 2 + (q._loc[1] - y) ** 2 <= r2:
+                    if q is not me and q.in_park and (q._loc[0] - x) ** 2 + (q._loc[1] - y) ** 2 <= r2:
                         found.append(q)
         found.sort(key=lambda q: q.idx)
         return found
@@ -1796,8 +1963,10 @@ class Model:
             + [self.enc_share_remembered, self.enc_share_ever, self.enc_distinct]
             + ["n/a" if (P.well_mixed or not P.real_env) else self.network.edges_removed]
             + self._kin_columns()
-            + [P.rest_on, P.rest_zone_count if P.rest_on else "n/a",
-               P.rest_zone_placement if P.rest_on else "n/a"] + self.rest_metrics())
+            + [P.rest_on, (len(self.rest_zones) if P.rest_zone_file else P.rest_zone_count) if P.rest_on else "n/a",
+               ("file" if P.rest_zone_file else P.rest_zone_placement) if P.rest_on else "n/a"] + self.rest_metrics()
+            + [P.bank_on, P.bank_present_share if P.bank_on else "n/a", P.bank_mean_stay if P.bank_on else "n/a"]
+            + self.bank_metrics())
 
     def _kin_columns(self):
         P = self.p
@@ -1820,6 +1989,11 @@ class Model:
         """Punkt zaczepienia dla obserwatorów (Faza 7); dziś: metryka stabilności spotkań."""
         g.p1.record_encounter(g.p2, g.knew1_rem, g.knew1_ever, g.cell1)
         g.p2.record_encounter(g.p1, g.knew2_rem, g.knew2_ever, g.cell2)
+        if self.bank_rng is not None:
+            for a, b in ((g.p1, g.p2), (g.p2, g.p1)):
+                v = a.first_met_visit.setdefault(b, a.visit_no)
+                self.bank_games += 1
+                self.bank_cross_visit += v < a.visit_no
 
     def _reflex_close_encounter_window(self):
         active = [p for p in self.players if p.enc_games > 0]
@@ -1857,7 +2031,8 @@ class Model:
     def evolution_step(self):
         # synchronicznie: decyzje na starych charakterach i π, potem zmiana; okna zerowane u wszystkich
         evolvable = self.p.evolvable_characters
-        decisions = [(p, p.evolution_choice(p.pick_model())) for p in self.players if p.character in evolvable]
+        decisions = [(p, p.evolution_choice(p.pick_model())) for p in self.players
+                     if p.character in evolvable and p.in_park]
         if self.p.kin_on:
             allc0 = self.share_of("ALLC")
             sxy, sxx = KinStats._within(self.kin_stats.blk_all)
@@ -1978,9 +2153,12 @@ class Model:
                 c.apply_decay(self)
         # game
         self.games = [g for g in self.games if g.step()]
+        if self.bank_rng is not None:
+            self._reflex_visitor_bank()
         # player
         for pl in list(self.players):
-            pl.step()
+            if pl.in_park:
+                pl.step()
         self.cycle += 1
 
     def run(self, n):
@@ -2021,7 +2199,7 @@ class Model:
                 "h": self.normalized_visual_height(p, heights), "fc": p.for_chart,
                 "score": p.score, "games": p.nb_games, "known": len(p.known_others),
                 "links": links(p) if P.show_social_links else [],
-                "rest": p.resting, "frail": p.frail, "energy": round(p.energy, 3),
+                "rest": p.resting, "frail": p.frail, "energy": round(p.energy, 3), "in_park": p.in_park,
             })
         return json.dumps({
             "cycle": self.cycle, "w": self.width, "h": self.height,
@@ -2071,7 +2249,9 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "nb_character_changes", "network_variant"] + NET_STAT_KEYS + [
                  "enc_share_remembered", "enc_share_ever", "enc_distinct", "net_edges_removed"] + KIN_HEADER + [
                  "rest_on", "rest_zone_count", "rest_zone_placement", "rest_time_share", "rest_games_share",
-                 "rest_bouts_per_agent", "frail_share_realised"]
+                 "rest_bouts_per_agent", "frail_share_realised",
+                 "bank_on", "bank_present_share", "bank_mean_stay", "bank_present_realised", "bank_visits_per_agent",
+                 "bank_cross_visit_share"]
 
 CSV_HEADERS = {
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
@@ -3260,6 +3440,130 @@ def t_rest_games_counted():
 def t_rest_ignored_when_well_mixed():
     m = _rest_model(well_mixed=True)
     assert m.rest_next_hop is None and any("Moduł 4" in w for w in m.warnings)
+
+
+def _bank_model(**kw):
+    base = dict(compat_core=True, compat_N=400, compat_mix="equal", network_cleanup=True, synthetic_grid=32,
+                vision_radius=30, player_speed=2.0, log_games=False, bank_on=True, bank_present_share=0.25,
+                bank_mean_stay=200)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def t_bank_off_is_inert():
+    m = _bank_model(bank_on=False)
+    assert m.bank_rng is None and all(p.in_park and p.visit_no == 0 for p in m.players)
+    m.run(50)
+    assert all(p.in_park for p in m.players) and m.bank_metrics() == ["n/a"] * 3
+
+
+def t_bank_same_population_with_and_without():
+    a = Model(Params(compat_core=True, compat_N=200, network_cleanup=True, synthetic_grid=32), seed=7)
+    b = Model(Params(compat_core=True, compat_N=200, network_cleanup=True, synthetic_grid=32, bank_on=True), seed=7)
+    assert [(p.character, p.current_node) for p in a.players] == [(p.character, p.current_node) for p in b.players]
+
+
+def t_bank_present_share_holds():
+    m = _bank_model(synthetic_grid=10)            # gęsto: spotkania z wcześniejszych wizyt się zdarzają
+    assert sum(p.in_park for p in m.players) == 100
+    m.run(3000)
+    share, visits, cross = m.bank_metrics()
+    assert 0.22 < share < 0.28, share
+    assert visits > 2.5 and cross > 0.01, (visits, cross)
+
+
+def t_bank_absent_do_not_move_or_play():
+    m = _bank_model()
+    m.run(20)
+    out = [p for p in m.players if not p.in_park]
+    snap = {p.idx: (p.location, p.nb_games, p.character) for p in out}
+    m.bank_rng = random.Random(0)
+    m.p.bank_mean_stay = 10 ** 9                   # nikt nie wychodzi
+    m.p.bank_present_share = 1e-12                 # i prawie nikt nie wraca
+    m.run(30)
+    for p in out:
+        if not p.in_park:
+            assert (p.location, p.nb_games, p.character) == snap[p.idx]
+    here = [p for p in m.players if p.in_park]
+    assert all(q.in_park for p in here[:20] for q in m.players_within(p, 30))
+
+
+def t_bank_memory_survives_absence():
+    m = _bank_model(bank_mean_stay=100)
+    m.run(1500)
+    back = [p for p in m.players if p.visit_no >= 2 and p.in_park and p.met_count]
+    assert back
+    p = back[0]
+    known = dict(p.met_count)
+    m._bank_leave(p)
+    m.run(5)
+    m._bank_enter(p)
+    assert all(p.met_count.get(q, 0) >= n for q, n in known.items())
+    assert p.visit_no >= 3 and p.current_node in m.bank_nodes
+
+
+def t_bank_rejects_bad_params():
+    for kw in (dict(bank_present_share=0.0), dict(bank_present_share=1.5), dict(bank_mean_stay=0),
+               dict(kin_on=True, evolution_on=True)):
+        try:
+            _bank_model(**kw)
+        except ModelError:
+            continue
+        raise AssertionError("brak błędu dla %s" % kw)
+
+
+def t_bank_well_mixed_uses_present_only():
+    m = _bank_model(well_mixed=True, bank_mean_stay=10 ** 9)
+    m.run(50)
+    here = {p for p in m.players if p.in_park}
+    assert all(g.p1 in here and g.p2 in here for g in m.games)
+
+
+def t_bank_with_rest_zones_and_export():
+    m = _bank_model(rest_on=True, compat_export=True, end_cycle=300)
+    m.run(301)
+    row = m.compat_rows[0]
+    assert len(row) == len(COMPAT_HEADER)
+    h = dict(zip(COMPAT_HEADER, row))
+    assert h["bank_on"] is True and 0.0 < h["bank_present_realised"] < 1.0
+    assert not any(p.resting for p in m.players if not p.in_park)
+
+
+def t_rest_zones_from_geojson_file():
+    import tempfile, os
+    lines = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {}, "geometry": {"type": "LineString",
+         "coordinates": [[17.000, 51.100], [17.002, 51.100], [17.004, 51.100]]}},
+        {"type": "Feature", "properties": {}, "geometry": {"type": "LineString",
+         "coordinates": [[17.002, 51.100], [17.002, 51.102]]}}]}
+    pts = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"kind": "bench"}, "geometry": {"type": "Point", "coordinates": [17.0041, 51.1001]}},
+        {"type": "Feature", "properties": {"kind": "bench"}, "geometry": {"type": "Point", "coordinates": [17.0040, 51.1000]}},
+        {"type": "Feature", "properties": {"kind": "picnic_table"},
+         "geometry": {"type": "Point", "coordinates": [17.0021, 51.1019]}}]}
+    fd, path = tempfile.mkstemp(suffix=".geojson")
+    with os.fdopen(fd, "w") as f:
+        json.dump(pts, f)
+    try:
+        net = PathNetwork.from_geojson(lines)
+        m = Model(Params(compat_core=True, compat_N=20, rest_on=True, rest_zone_file=path, compat_export=True,
+                         end_cycle=5), seed=1, network=net)
+        ends = {tuple(round(c, 3) for c in m.network.vertices[z]) for z in m.rest_zones}
+        e_end = tuple(round(c, 3) for c in net.to_local(17.004, 51.100))
+        n_end = tuple(round(c, 3) for c in net.to_local(17.002, 51.102))
+        assert len(m.rest_zones) == 2 and ends == {e_end, n_end}, (ends, e_end, n_end)
+        m.run(6)
+        h = dict(zip(COMPAT_HEADER, m.compat_rows[0]))
+        assert h["rest_zone_count"] == 2 and h["rest_zone_placement"] == "file"
+        v = net.variant("fragmented", random.Random(0))
+        assert v.geo == net.geo
+        # zapis stref do GeoJSON wraca do współrzędnych pliku (lon, lat węzłów)
+        out = json.loads(m.rest_zones_geojson())
+        got = sorted(tuple(round(c, 6) for c in f["geometry"]["coordinates"]) for f in out["features"])
+        assert got == [(17.002, 51.102), (17.004, 51.1)], got
+        assert all(f["properties"]["layer"] == "rest_zones" for f in out["features"])
+    finally:
+        os.remove(path)
 
 
 TESTS = [(name[2:], fn) for name, fn in sorted(globals().items()) if name.startswith("t_") and callable(fn)]
