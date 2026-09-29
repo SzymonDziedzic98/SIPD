@@ -552,6 +552,7 @@ function drawMap(canvas, mode) {
   if (!net.lines.length) { ctx.strokeStyle = css("--line"); ctx.strokeRect(X(0), Y(0), net.w * s, net.h * s); }
   // linie relacji społecznych (top 3 powyżej progu)
   for (const p of snap.players) {
+    if (p.in_park === false) continue;
     if (mode === "personal" && p.i !== snap.sel) continue;
     for (const [x, y, v] of p.links) {
       ctx.strokeStyle = v > 0 ? "rgba(0," + Math.round(200 * Math.min(1, v)) + ",60,0.85)"
@@ -568,6 +569,7 @@ function drawMap(canvas, mode) {
   }
   // agenci: promień rośnie z normalized_visual_height (odpowiednik wysokości stożka)
   for (const p of snap.players) {
+    if (p.in_park === false) continue;   // Moduł 5: odwiedzający w banku nie są w parku
     const r = 3.5 + p.h * 0.6;
     ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), r, 0, 2 * Math.PI);
     ctx.fillStyle = COLORS[p.ch] || "#888"; ctx.fill();
@@ -611,6 +613,7 @@ function pickAgent(ev) {
   const { X, Y } = fit(cv);
   let best = null, bd = Infinity;
   for (const p of snap.players) {
+    if (p.in_park === false) continue;
     const d = Math.hypot(X(p.x) - mx, Y(p.y) - my);
     if (d < bd) { bd = d; best = p; }
   }

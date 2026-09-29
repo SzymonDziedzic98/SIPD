@@ -136,3 +136,31 @@ Cel: zmienna projektowa zamiast globalnej prędkości. Liczba, rozmieszczenie i 
   rozmieszczenie × liczba stref {5, 10, 20}, 3 powtórzenia, 100 000 cykli).
 - Eksperyment właściwy: `PM11_rest_off` (10 powtórzeń) i `PM11_rest_on` (rozmieszczenie × liczba stref, 5 powtórzeń),
   N = 200, prędkość 2, 100 000 cykli; macierz ustawiana przez `--set payoff_preset=...`.
+
+## Moduł 5 – bank odwiedzających (propozycja, gałąź `feature/visitor-bank`, na `feature/rest-zones`)
+
+Cel: rotacja odwiedzających w realnych parkach (tekst D). Zamknięta populacja po 20 000 cykli spotyka prawie
+wszystkich, więc udział spotkań powtórnych nasyca się (0,97–1,00 w pilotażu na pięciu parkach Wrocławia).
+Decyzja autora (29.09.2026): odwiedzający po wyjściu nie znika, tylko trafia do banku, skąd może wrócić,
+z całą pamięcią.
+
+- Przełącznik `bank_on` (domyślnie `false`). Przy wyłączonym module odcisk `R0_regression`,
+  `character_timeseries.csv`, `encounter_cells.csv` i dotychczasowe kolumny `compat_results.csv` są identyczne
+  jak przed zmianą (sprawdzone dla rdzenia, Modułu 4 i `well_mixed`).
+- `compat_N` to cała pula odwiedzających. W parku jest średnio `bank_present_share` (0,25) puli.
+  Wizyta trwa średnio `bank_mean_stay` (1000) cykli: obecny wychodzi z p = 1/`bank_mean_stay` na cykl,
+  nieobecny wraca z p dobranym tak, by w stanie ustalonym udział obecnych był równy `bank_present_share`.
+  Na starcie w parku jest losowe `round(bank_present_share × compat_N)` agentów.
+- Nieobecny nie rusza się, nie gra i nie imituje, a obecni go nie widzą (`players_within`, `well_mixed`).
+  Zachowuje strategię, wynik i całą pamięć partnerów (także `known_others` przy limicie Dunbara).
+  Wraca w losowym węźle sieci (wejścia parku: do decyzji). Z Modułem 4 wraca wypoczęty (energia jak na starcie).
+- Osobny generator (seed przebiegu), więc strategie i węzły startowe są te same z modułem i bez niego.
+- Udziały strategii i średnie liczone są dla całej puli; ewolucja zmienia strategie tylko obecnym.
+- Nowe kolumny `compat_results.csv`: `bank_on`, `bank_present_share`, `bank_mean_stay`,
+  `bank_present_realised`, `bank_visits_per_agent`, `bank_cross_visit_share` (udział gier z partnerem
+  poznanym na wcześniejszej wizycie).
+- Na razie bez łączenia z Modułem 3 (`kin_on` → błąd).
+
+Moduł 4, dodatek: `rest_zone_file` – GeoJSON z punktami stref (np. ławki i stoły piknikowe z OSM, ten sam
+układ współrzędnych co sieć). Każdy punkt trafia do najbliższego węzła sieci; `rest_zone_count` i
+`rest_zone_placement` są wtedy pomijane, a w CSV zapisuje się liczbę węzłów i `file`.
