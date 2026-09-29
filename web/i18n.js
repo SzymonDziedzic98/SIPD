@@ -86,6 +86,10 @@ const L = (pl, en) => (I18N.lang === "en" ? en : pl);
 
 // słownik PL → EN dla tekstów statycznych index.html (klucz: tekst po zwinięciu spacji)
 const I18N_EN = {
+ "Strefy odpoczynku (GeoJSON z punktami)": "Rest zones (GeoJSON points)",
+ "Pobierz ławki i stoły z OSM": "Fetch benches and tables from OSM",
+ "Zapisz strefy (GeoJSON)": "Save zones (GeoJSON)",
+ "Ławki (amenity=bench) i stoły piknikowe (leisure=picnic_table) z OpenStreetMap w obrysie wczytanej sieci": "Benches (amenity=bench) and picnic tables (leisure=picnic_table) from OpenStreetMap inside the loaded network",
  "Ładowanie Pythona (Pyodide)…": "Loading Python (Pyodide)…",
  "Nie udało się wczytać <code>sipd.py</code> obok strony (strona otwarta jako plik?). Wskaż plik ręcznie albo uruchom <code>python -m http.server</code> w katalogu <code>web/</code>.": "Could not load <code>sipd.py</code> next to the page (opened as a local file?). Pick the file by hand or run <code>python -m http.server</code> in the <code>web/</code> folder.",
  "SIPD – przestrzenny dylemat więźnia": "SIPD – spatial prisoner's dilemma",
@@ -149,9 +153,26 @@ const I18N_CAT_EN = {
  "Stabilność spotkań": "Encounter stability",
  "Moduł 3 – pokrewieństwo": "Module 3 – kinship",
  "Diagnostyka": "Diagnostics",
+ "Moduł 4 – strefy odpoczynku": "Module 4 – rest zones",
+ "Moduł 5 – bank odwiedzających": "Module 5 – visitor bank",
  "Pozostałe (poza GUI w GAMA)": "Other (not in the GAMA GUI)"
 };
 const I18N_PARAM_EN = {
+ "rest_on": "Rest zones and fatigue",
+ "rest_zone_count": "Number of zones",
+ "rest_zone_placement": "Zone placement",
+ "rest_zone_file": "Zone file (GeoJSON, e.g. OSM benches)",
+ "frail_share": "Share of older / frail visitors",
+ "fatigue_regular_mean": "Fatigue per 100 m – regular (mean)",
+ "fatigue_regular_sd": "Fatigue – regular (SD)",
+ "fatigue_frail_mean": "Fatigue per 100 m – older (mean)",
+ "fatigue_frail_sd": "Fatigue – older (SD)",
+ "rest_threshold": "Energy threshold: seek a zone",
+ "rest_recovery": "Energy recovery per cycle",
+ "rest_target": "Energy: end of rest",
+ "bank_on": "Visitor turnover (bank)",
+ "bank_present_share": "Share of pool present in the park",
+ "bank_mean_stay": "Mean visit length (cycles)",
  "selected_index": "Selected agent (index)",
  "show_social_links": "Show social relation lines",
  "social_link_threshold": "Line drawing threshold",

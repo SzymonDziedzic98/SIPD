@@ -186,6 +186,13 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
       <input type="file" id="geoFile" accept=".geojson,.json"></div>
     <p class="hint" id="geoInfo" data-noi18n>Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
+    <div class="field stack"><label for="zoneFile">Strefy odpoczynku (GeoJSON z punktami)</label>
+      <input type="file" id="zoneFile" accept=".geojson,.json"></div>
+    <div class="controls">
+      <button class="btn" id="btnOsmZones" title="Ławki (amenity=bench) i stoły piknikowe (leisure=picnic_table) z OpenStreetMap w obrysie wczytanej sieci">Pobierz ławki i stoły z OSM</button>
+      <button class="btn" id="btnSaveZones" disabled>Zapisz strefy (GeoJSON)</button>
+    </div>
+    <p class="hint" id="zoneInfo" data-noi18n></p>
     <div id="paramForm"></div>
   </aside>
 
@@ -289,7 +296,9 @@ const RESTART_KEYS = new Set(["real_env", "world_size", "grid_cols", "grid_rows"
   "nb_TFT", "nb_ALLC", "nb_ALLD", "nb_FTFT", "nb_TF2T", "nb_GRIM", "nb_WSLS", "game_type", "payoff_T",
   "payoff_R", "payoff_P", "payoff_S", "movement_sensitivity", "env_influence_qlearn",
   "social_sensitivity_aqlearn", "social_learning_boost_aqlearn", "base_character_qlearn",
-  "character_strength_qlearn", "synthetic_grid", "synthetic_spacing", "well_mixed"]);
+  "character_strength_qlearn", "synthetic_grid", "synthetic_spacing", "well_mixed",
+  "rest_on", "rest_zone_count", "rest_zone_placement", "rest_zone_file", "frail_share",
+  "bank_on", "bank_present_share"]);
 
 let py = null, DEFAULTS = {}, GUI = [], EXPS = {};
 let running = false, snap = null, net = null, hasModel = false;
@@ -342,6 +351,8 @@ def _new_model(params_json, seed):
     global M
     M = sipd.Model(sipd.Params(**json.loads(params_json)), seed=seed, geojson=GEO)
     return json.dumps({"warnings": M.warnings, "network": json.loads(M.network_json())})
+def _zones_geojson():
+    return M.rest_zones_geojson() if M is not None else ""
 def _set(key, value_json):
     if M is not None:
         setattr(M.p, key, json.loads(value_json))
@@ -493,6 +504,7 @@ function initModel() {
     return;
   }
   ["btnRun", "btnStep"].forEach((id) => { $(id).disabled = false; });
+  if (readInput("rest_on")) $("btnSaveZones").disabled = false;
   resetCharts();
   snap = JSON.parse(py.runPython("M.snapshot()"));
   redraw();
@@ -566,6 +578,7 @@ function drawMap(canvas, mode) {
   if (!net.lines.length) { ctx.strokeStyle = css("--line"); ctx.strokeRect(X(0), Y(0), net.w * s, net.h * s); }
   // linie relacji społecznych (top 3 powyżej progu)
   for (const p of snap.players) {
+    if (p.in_park === false) continue;
     if (mode === "personal" && p.i !== snap.sel) continue;
     for (const [x, y, v] of p.links) {
       ctx.strokeStyle = v > 0 ? "rgba(0," + Math.round(200 * Math.min(1, v)) + ",60,0.85)"
@@ -582,6 +595,7 @@ function drawMap(canvas, mode) {
   }
   // agenci: promień rośnie z normalized_visual_height (odpowiednik wysokości stożka)
   for (const p of snap.players) {
+    if (p.in_park === false) continue;   // Moduł 5: odwiedzający w banku nie są w parku
     const r = 3.5 + p.h * 0.6;
     ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), r, 0, 2 * Math.PI);
     ctx.fillStyle = COLORS[p.ch] || "#888"; ctx.fill();
@@ -629,6 +643,7 @@ function pickAgent(ev) {
   const { X, Y } = fit(cv);
   let best = null, bd = Infinity;
   for (const p of snap.players) {
+    if (p.in_park === false) continue;
     const d = Math.hypot(X(p.x) - mx, Y(p.y) - my);
     if (d < bd) { bd = d; best = p; }
   }
@@ -684,8 +699,8 @@ function updateCharts(first = false) {
 }
 
 // ---------- pobieranie CSV ----------
-function download(name, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+function download(name, text, mime = "text/csv") {
+  const url = URL.createObjectURL(new Blob([text], { type: mime + ";charset=utf-8" }));
   const a = document.createElement("a"); a.href = url; a.download = name;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -825,6 +840,110 @@ $("geoFile").addEventListener("change", async (ev) => {
     if (info.ok) { geoState = null; $("geoInfo").textContent = L("Wczytano ", "Loaded ") + f.name + L(". Kliknij Inicjalizuj.", ". Click Initialise."); }
   } catch (e) { geoState = null; $("geoInfo").textContent = L("Błąd pliku ", "Error in file ") + f.name + ": " + pyError(e); }
 });
+// ---------- Moduł 4: strefy odpoczynku z pliku lub z OSM ----------
+let ZONES = null;   // FeatureCollection punktów w układzie pliku sieci
+let zoneMsg = null; // ostatni komunikat [pl, en]; null = tekst domyślny
+function zoneInfo(pl, en) { zoneMsg = [pl, en]; renderZoneInfo(); }
+function renderZoneInfo() {
+  if (zoneMsg) { $("zoneInfo").textContent = L(zoneMsg[0], zoneMsg[1]); return; }
+  $("zoneInfo").innerHTML = L(
+    "Strefy z pliku lub z OSM trafiają do parametru <code>rest_zone_file</code> (Moduł 4, włącz <code>rest_on</code>). Bez pliku zapis bierze strefy z bieżącego modelu.",
+    "Zones from a file or from OSM go into the <code>rest_zone_file</code> parameter (Module 4, switch on <code>rest_on</code>). Without a file, saving takes the current model's zones.");
+}
+const ZONE_FILE = "rest_zones.geojson";
+function geoFeatures() {
+  const t = py && py.globals.get("GEO");
+  return t ? (JSON.parse(t).features || []) : [];
+}
+function eachCoord(c, f) { if (typeof c[0] === "number") f(c); else c.forEach((q) => eachCoord(q, f)); }
+function centroid(coords) {
+  let sx = 0, sy = 0, n = 0;
+  eachCoord(coords, ([x, y]) => { sx += x; sy += y; n++; });
+  return [sx / n, sy / n];
+}
+function inRing([x, y], ring) {
+  let ins = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x1, y1] = ring[i], [x2, y2] = ring[j];
+    if ((y1 > y) !== (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1) ins = !ins;
+  }
+  return ins;
+}
+function useZones(fc, label) {
+  ZONES = fc;
+  py.FS.writeFile(ZONE_FILE, JSON.stringify(fc));
+  const el = $("p_rest_zone_file");
+  if (el) { el.value = ZONE_FILE; onParamChange("rest_zone_file"); }
+  const kinds = {};
+  fc.features.forEach((f) => { const k = (f.properties || {}).kind || "inne"; kinds[k] = (kinds[k] || 0) + 1; });
+  const lst = Object.entries(kinds).map(([k, n]) => k + " " + n).join(", ");
+  zoneInfo(label[0] + ": liczba punktów " + fc.features.length + " (" + lst + "). Ustawiono rest_zone_file; włącz rest_on i kliknij Inicjalizuj.",
+           label[1] + ": " + fc.features.length + " points (" + lst + "). rest_zone_file is set; switch on rest_on and click Initialise.");
+  $("btnSaveZones").disabled = false;
+}
+async function fetchOsmZones() {
+  const feats = geoFeatures();
+  if (!feats.length) { zoneInfo("Najpierw wczytaj sieć ścieżek z GeoJSON w stopniach (lon, lat).", "Load a path network from GeoJSON in degrees (lon, lat) first."); return; }
+  let s = 90, w = 180, n = -90, e = -180;
+  feats.forEach((f) => f.geometry && eachCoord(f.geometry.coordinates, ([x, y]) => {
+    s = Math.min(s, y); n = Math.max(n, y); w = Math.min(w, x); e = Math.max(e, x);
+  }));
+  if (s < -90 || n > 90 || w < -180 || e > 180) { zoneInfo("Sieć nie jest w stopniach geograficznych, pobranie z OSM niemożliwe.", "The network is not in geographic degrees, so OSM cannot be queried."); return; }
+  const bb = [s, w, n, e].map((v) => v.toFixed(6)).join(",");
+  const q = '[out:json][timeout:60];(nwr["amenity"="bench"](' + bb + ');nwr["leisure"="picnic_table"](' + bb + '););out center tags;';
+  $("btnOsmZones").disabled = true;
+  zoneInfo("Pobieram z Overpass…", "Fetching from Overpass…");
+  let data = null, err = "";
+  for (const url of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]) {
+    try {
+      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q),
+                                   headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      data = await r.json(); break;
+    } catch (ex) { err = ex.message; }
+  }
+  $("btnOsmZones").disabled = false;
+  if (!data) { zoneInfo("Nie udało się pobrać z Overpass (" + err + ").", "Could not fetch from Overpass (" + err + ")."); return; }
+  // obrys parku (warstwa boundary), jeśli jest w pliku sieci; bez niego zostaje cały prostokąt
+  const rings = [];
+  feats.forEach((f) => {
+    const g = f.geometry, pr = f.properties || {};
+    if (!g || pr.layer !== "boundary") return;
+    if (g.type === "Polygon") rings.push(g.coordinates[0]);
+    if (g.type === "MultiPolygon") g.coordinates.forEach((pl) => rings.push(pl[0]));
+  });
+  const out = [];
+  for (const el of data.elements || []) {
+    const t = el.tags || {};
+    const kind = t.amenity === "bench" ? "bench" : t.leisure === "picnic_table" ? "picnic_table" : null;
+    const c = el.type === "node" ? [el.lon, el.lat] : el.center ? [el.center.lon, el.center.lat] : null;
+    if (!kind || !c) continue;
+    if (rings.length && !rings.some((r) => inRing(c, r))) continue;
+    out.push({ type: "Feature", properties: { layer: "rest_zones", kind, osm_id: el.type + "/" + el.id },
+               geometry: { type: "Point", coordinates: c } });
+  }
+  if (!out.length) { zoneInfo("OSM nie ma ławek ani stołów piknikowych w tym obszarze.", "OSM has no benches or picnic tables in this area."); return; }
+  const day = new Date().toISOString().slice(0, 10);
+  useZones({ type: "FeatureCollection", features: out }, ["OSM (" + day + (rings.length ? ", w obrysie parku)" : ", prostokąt sieci)"),
+                                                          "OSM (" + day + (rings.length ? ", inside the park boundary)" : ", network bounding box)")]);
+}
+$("btnOsmZones").addEventListener("click", fetchOsmZones);
+$("zoneFile").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0]; if (!f || !py) return;
+  try {
+    const d = JSON.parse(await f.text());
+    const src = d.type === "FeatureCollection" ? d.features : [d.type === "Feature" ? d : { type: "Feature", properties: {}, geometry: d }];
+    const out = src.filter((x) => x.geometry).map((x) => ({ type: "Feature", properties: x.properties || {},
+      geometry: { type: "Point", coordinates: x.geometry.type === "Point" ? x.geometry.coordinates : centroid(x.geometry.coordinates) } }));
+    if (!out.length) throw new Error("brak geometrii");
+    useZones({ type: "FeatureCollection", features: out }, [f.name, f.name]);
+  } catch (e) { zoneInfo("Błąd pliku " + f.name + ": " + e.message, "Error in file " + f.name + ": " + e.message); }
+});
+$("btnSaveZones").addEventListener("click", () => {
+  let text = ZONES ? JSON.stringify(ZONES, null, 1) : (hasModel ? py.globals.get("_zones_geojson")() : "");
+  if (!text || !JSON.parse(text).features.length) { zoneInfo("Brak stref do zapisania (włącz rest_on i zainicjalizuj model albo pobierz z OSM).", "No zones to save (switch on rest_on and initialise the model, or fetch from OSM)."); return; }
+  download("rest_zones.geojson", text, "application/geo+json");
+});
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redraw(); });
 // ---------- język ----------
 let netKind = null, geoState = "default";
@@ -861,7 +980,7 @@ function renderGeoInfo() {
 I18N.onChange(() => {
   document.querySelectorAll("#paramForm summary").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_CAT_EN[el.dataset.pl] || el.dataset.pl); });
   document.querySelectorAll("#paramForm label[data-key]").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_PARAM_EN[el.dataset.key] || el.dataset.pl); });
-  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo();
+  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo();
   for (const ch of [chartScore, chartDunbar, chartShares]) {
     if (!ch) continue;
     ch.options.scales.x.title.text = L("cykl", "cycle");
@@ -870,6 +989,7 @@ I18N.onChange(() => {
   }
 });
 renderGeoInfo();
+renderZoneInfo();
 runLabel();
 
 buildSimDownloads();
