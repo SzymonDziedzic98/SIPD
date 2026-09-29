@@ -164,3 +164,10 @@ z całą pamięcią.
 Moduł 4, dodatek: `rest_zone_file` – GeoJSON z punktami stref (np. ławki i stoły piknikowe z OSM, ten sam
 układ współrzędnych co sieć). Każdy punkt trafia do najbliższego węzła sieci; `rest_zone_count` i
 `rest_zone_placement` są wtedy pomijane, a w CSV zapisuje się liczbę węzłów i `file`.
+
+W aplikacji web (panel Symulacja, pod plikiem sieci): „Pobierz ławki i stoły z OSM” pyta Overpass o
+`amenity=bench` i `leisure=picnic_table` w prostokącie wczytanej sieci i zostawia punkty w obrysie parku
+(warstwa `boundary`, jeśli jest w pliku). Strefy można też wczytać z pliku. W obu przypadkach aplikacja
+zapisuje je jako `rest_zones.geojson` i ustawia `rest_zone_file`. „Zapisz strefy (GeoJSON)” pobiera te
+punkty, a bez nich strefy bieżącego modelu (węzły sieci w układzie pliku sieci, `Model.rest_zones_geojson()`).
+Zmiana parametrów Modułów 4 i 5 działa po ponownej inicjalizacji.

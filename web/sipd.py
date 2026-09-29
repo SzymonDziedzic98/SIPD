@@ -564,6 +564,17 @@ class PathNetwork:
             x, y = math.radians(x) * r * math.cos(lat0), math.radians(y) * r
         return (x - minx, maxy - y)
 
+    def to_geo(self, x, y):
+        """Odwrotność to_local: współrzędne modelu -> układ pliku GeoJSON sieci."""
+        if self.geo is None:
+            raise ModelError("Sieć nie pochodzi z GeoJSON - brak przekształcenia współrzędnych.")
+        geographic, lat0, minx, maxy = self.geo
+        x, y = x + minx, maxy - y
+        if geographic:
+            r = 6371008.8
+            x, y = math.degrees(x / (r * math.cos(lat0))), math.degrees(y / r)
+        return (x, y)
+
     @classmethod
     def synthetic(cls, seed=12345, n=10, spacing=60.0):
         """Zastępcza 'parkowa' sieć (zaszumiona siatka + kilka przekątnych), gdy brak drogi.geojson."""
@@ -1525,6 +1536,18 @@ class Model:
                 for v in pool:
                     d[v] = min(d[v], _dist(net.vertices[v], net.vertices[nxt]))
         self._finish_rest_setup(zones, rng)
+
+    def rest_zones_geojson(self):
+        """Bieżące strefy odpoczynku (węzły sieci) jako GeoJSON w układzie pliku sieci (albo modelu, gdy sieć syntetyczna)."""
+        net = self.network
+        feats = []
+        for z in self.rest_zones:
+            x, y = net.vertices[z]
+            if net.geo is not None:
+                x, y = net.to_geo(x, y)
+            feats.append({"type": "Feature", "properties": {"layer": "rest_zones", "kind": "model_node", "node": z},
+                          "geometry": {"type": "Point", "coordinates": [x, y]}})
+        return json.dumps({"type": "FeatureCollection", "features": feats})
 
     def _rest_zones_from_file(self, path):
         """Punkty (lub środki innych geometrii) z GeoJSON -> najbliższe węzły sieci, bez powtórzeń."""
@@ -3534,6 +3557,11 @@ def t_rest_zones_from_geojson_file():
         assert h["rest_zone_count"] == 2 and h["rest_zone_placement"] == "file"
         v = net.variant("fragmented", random.Random(0))
         assert v.geo == net.geo
+        # zapis stref do GeoJSON wraca do współrzędnych pliku (lon, lat węzłów)
+        out = json.loads(m.rest_zones_geojson())
+        got = sorted(tuple(round(c, 6) for c in f["geometry"]["coordinates"]) for f in out["features"])
+        assert got == [(17.002, 51.102), (17.004, 51.1)], got
+        assert all(f["properties"]["layer"] == "rest_zones" for f in out["features"])
     finally:
         os.remove(path)
 
