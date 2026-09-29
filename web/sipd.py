@@ -134,7 +134,7 @@ DEFAULTS = {
     "fatigue_frail_mean": 0.2,         # starsi / schorowani męczą się szybciej
     "fatigue_frail_sd": 0.05,
     "rest_threshold": 0.3,             # poniżej tej energii agent idzie do najbliższej strefy
-    "rest_recovery": 0.002,            # odzysk energii na cykl w strefie
+    "rest_recovery": 0.005,            # odzysk energii na cykl; przy prędkości 2 daje ok. 25% czasu w strefach
     "rest_target": 1.0,                # energia, przy której agent wstaje
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
@@ -2271,6 +2271,16 @@ BATCH_EXPERIMENTS["PM10_rest_on"] = dict(
     among={"payoff_preset": ["PD_classic", "snowdrift"], "rest_zone_placement": ["dispersed", "central", "peripheral"],
            "rest_zone_count": [5, 10, 20], "compat_N": [200]},
     params=dict(_REST, variant_name="PM10_rest_on", rest_on=True))
+
+# eksperyment właściwy po kalibracji (rest_recovery 0,005); macierz przez --set payoff_preset=...
+BATCH_EXPERIMENTS["PM11_rest_off"] = dict(
+    repeat=10, until="end_cycle", seed=20261123, among={"compat_N": [200]},
+    params=dict(_REST, variant_name="PM11_rest_off", rest_on=False))
+BATCH_EXPERIMENTS["PM11_rest_on"] = dict(
+    repeat=5, until="end_cycle", seed=20261123,
+    among={"rest_zone_placement": ["dispersed", "central", "peripheral"], "rest_zone_count": [5, 10, 20],
+           "compat_N": [200]},
+    params=dict(_REST, variant_name="PM11_rest_on", rest_on=True))
 
 
 def park_grid_for(n_agents):

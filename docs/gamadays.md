@@ -122,14 +122,17 @@ Cel: zmienna projektowa zamiast globalnej prędkości. Liczba, rozmieszczenie i 
   `fatigue_frail_sd` 0,05), na 100 m, obcięte od dołu do 0,005. Udział starszych `frail_share` 0,2.
   Energia startowa losowa z [`rest_threshold`, 1].
 - Poniżej `rest_threshold` (0,3) agent idzie najkrótszą drogą do najbliższej strefy (Dijkstra z wielu źródeł,
-  liczona raz). W strefie stoi, odzyskuje `rest_recovery` (0,002) na cykl do `rest_target` (1,0) i przez cały
+  liczona raz). W strefie stoi, odzyskuje `rest_recovery` (0,005) na cykl do `rest_target` (1,0) i przez cały
   czas gra z sąsiadami w `vision_radius`. Strefy nie mają limitu miejsc.
 - Losowanie stref i zmęczenia ma osobny generator (seed przebiegu), więc strategie i węzły startowe są te same
   z modułem i bez niego (porównanie w parach).
 - Nowe kolumny `compat_results.csv`: `rest_on`, `rest_zone_count`, `rest_zone_placement`, `rest_time_share`
   (udział agento-cykli w odpoczynku), `rest_games_share` (udział gier z udziałem odpoczywającego),
   `rest_bouts_per_agent`, `frail_share_realised`.
-- Wartości domyślne zmęczenia i odzysku są robocze (nie kalibrowane). Przy prędkości 2 zwykły agent odpoczywa
-  co ok. 500 cykli przez ok. 350 cykli, więc spędza w strefach ok. 40% czasu.
+- Kalibracja (decyzja autora, 29.09.2026): 20–30% czasu w strefach. `rest_recovery` 0,005 daje przy prędkości 2
+  ok. 25% (zwykli ok. 21%, starsi ok. 40%; N = 200, 10 000 cykli). Przy innej prędkości udział się zmienia,
+  bo zmęczenie liczone jest na metr drogi. Pilotaż PM10 liczono jeszcze przy 0,002 (ok. 44% czasu w strefach).
 - Eksperymenty: `PM10_rest_off`, `PM10_rest_on` (N = 200, prędkość 2, ewolucja, mutacja 0,01, PD i snowdrift,
   rozmieszczenie × liczba stref {5, 10, 20}, 3 powtórzenia, 100 000 cykli).
+- Eksperyment właściwy: `PM11_rest_off` (10 powtórzeń) i `PM11_rest_on` (rozmieszczenie × liczba stref, 5 powtórzeń),
+  N = 200, prędkość 2, 100 000 cykli; macierz ustawiana przez `--set payoff_preset=...`.
