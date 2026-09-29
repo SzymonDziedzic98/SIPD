@@ -106,3 +106,33 @@ porównanie znaku zmiany udziału ALLC ze znakiem r̂_k·b − c (r̂_k z gier t
 też mutacje.
 
 Wyniki P4: `docs/p4_verdict_N200_r10.md`.
+
+## Moduł 4 – strefy odpoczynku i zmęczenie (propozycja, gałąź `feature/rest-zones`)
+
+Cel: zmienna projektowa zamiast globalnej prędkości. Liczba, rozmieszczenie i czas korzystania ze stref
+(ławki, place zabaw) mają zmieniać liczbę gier na partnera tak, jak dotąd zmieniała ją prędkość.
+
+- Przełącznik `rest_on` (domyślnie `false`). Przy wyłączonym module odcisk `R0_regression`,
+  `ablation_results.csv`, `character_timeseries.csv` i wszystkie dotychczasowe kolumny `compat_results.csv`
+  są identyczne jak przed zmianą (sprawdzone). Działa tylko na sieci (w `well_mixed` pomijany z ostrzeżeniem).
+- Strefy: `rest_zone_count` węzłów sieci; `rest_zone_placement` = `dispersed` (najdalszy punkt w całej sieci),
+  `central` (w promieniu 0,35 od środka), `peripheral` (poza 0,75 promienia), `random`.
+- Energia w [0, 1]; spada o `fatigue × przebyta droga`. Zmęczenie z dwóch rozkładów normalnych: zwykli
+  N(`fatigue_regular_mean` 0,07; `fatigue_regular_sd` 0,015) i starsi/schorowani N(`fatigue_frail_mean` 0,2;
+  `fatigue_frail_sd` 0,05), na 100 m, obcięte od dołu do 0,005. Udział starszych `frail_share` 0,2.
+  Energia startowa losowa z [`rest_threshold`, 1].
+- Poniżej `rest_threshold` (0,3) agent idzie najkrótszą drogą do najbliższej strefy (Dijkstra z wielu źródeł,
+  liczona raz). W strefie stoi, odzyskuje `rest_recovery` (0,005) na cykl do `rest_target` (1,0) i przez cały
+  czas gra z sąsiadami w `vision_radius`. Strefy nie mają limitu miejsc.
+- Losowanie stref i zmęczenia ma osobny generator (seed przebiegu), więc strategie i węzły startowe są te same
+  z modułem i bez niego (porównanie w parach).
+- Nowe kolumny `compat_results.csv`: `rest_on`, `rest_zone_count`, `rest_zone_placement`, `rest_time_share`
+  (udział agento-cykli w odpoczynku), `rest_games_share` (udział gier z udziałem odpoczywającego),
+  `rest_bouts_per_agent`, `frail_share_realised`.
+- Kalibracja (decyzja autora, 29.09.2026): 20–30% czasu w strefach. `rest_recovery` 0,005 daje przy prędkości 2
+  ok. 25% (zwykli ok. 21%, starsi ok. 40%; N = 200, 10 000 cykli). Przy innej prędkości udział się zmienia,
+  bo zmęczenie liczone jest na metr drogi. Pilotaż PM10 liczono jeszcze przy 0,002 (ok. 44% czasu w strefach).
+- Eksperymenty: `PM10_rest_off`, `PM10_rest_on` (N = 200, prędkość 2, ewolucja, mutacja 0,01, PD i snowdrift,
+  rozmieszczenie × liczba stref {5, 10, 20}, 3 powtórzenia, 100 000 cykli).
+- Eksperyment właściwy: `PM11_rest_off` (10 powtórzeń) i `PM11_rest_on` (rozmieszczenie × liczba stref, 5 powtórzeń),
+  N = 200, prędkość 2, 100 000 cykli; macierz ustawiana przez `--set payoff_preset=...`.
