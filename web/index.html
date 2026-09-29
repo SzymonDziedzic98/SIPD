@@ -185,7 +185,25 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <select id="preset"><option value="">—</option></select></div>
     <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
       <input type="file" id="geoFile" accept=".geojson,.json"></div>
+    <div class="field"><label for="geoFix" title="Łączenie rozłącznych kawałków (do 50 m), ścieżek równoległych (3 m), skrzyżowań (6 m) i ślepych końców (25 m), jak w PD">Popraw sieć z OSM</label>
+      <input type="checkbox" id="geoFix" checked></div>
     <p class="hint" id="geoInfo" data-noi18n>Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
+    <div class="field"><label for="parkSel">Park z OSM</label>
+      <select id="parkSel">
+        <option>Park Staszica</option>
+        <option>Park Szczytnicki</option>
+        <option>Park Południowy</option>
+        <option>Park Grabiszyński</option>
+        <option>Park Zachodni</option>
+        <option value="__custom">inna nazwa…</option>
+      </select></div>
+    <div class="field" id="parkCustomRow" hidden><label for="parkCustom">Nazwa w OSM</label>
+      <input type="text" id="parkCustom" placeholder="np. Park Tołpy"></div>
+    <div class="controls">
+      <button class="btn" id="btnParkLib" title="Park z biblioteki strony, już po poprawkach, bez pobierania z OSM">Wczytaj gotowy</button>
+      <button class="btn" id="btnParkOsm" title="Ścieżki parku z Overpass API (Wrocław), z poprawkami sieci jak w PD">Pobierz z OSM</button>
+      <button class="btn" id="btnParkSave" disabled>Zapisz GeoJSON</button>
+    </div>
     <div class="field stack"><label for="zoneFile">Strefy odpoczynku (GeoJSON z punktami)</label>
       <input type="file" id="zoneFile" accept=".geojson,.json"></div>
     <div class="controls">
@@ -347,6 +365,30 @@ import sipd
 M = None
 B = None
 GEO = None
+_GEO_NAME = "siec"
+
+def _prep_geo(text, name, fix):
+    """Tekst sieci (GeoJSON lub odpowiedź Overpass) -> GEO; poprawki sieci z PD (psm.py) dla danych w stopniach."""
+    global GEO, _GEO_NAME
+    obj = json.loads(text)
+    info = {}
+    if obj.get("elements") is not None or fix:
+        import psm
+        mark = obj.get(psm.PROCESSED_MARK)
+        geo_pts = obj.get("elements") is not None or psm.looks_geographic(
+            [p for _k, parts in psm.geojson_features(obj) for part in parts for p in part])
+        if mark:
+            info = {"processed": True}
+        elif geo_pts:
+            r, o, b = psm.load_inputs(text, None, name)
+            text = json.dumps(psm.processed_geojson(r, o, b, psm.LOAD_INFO["origin"], psm.LOAD_INFO), separators=(",", ":"))
+            info = {k: v for k, v in psm.LOAD_INFO.items() if k != "origin"}
+            info["fixed"] = True
+    net = sipd.PathNetwork.from_geojson(text)
+    GEO, _GEO_NAME = text, name
+    info.update(nodes=len(net.vertices), edges=sum(len(v) for v in net.adj.values()) // 2)
+    return json.dumps(info)
+
 def _new_model(params_json, seed):
     global M
     M = sipd.Model(sipd.Params(**json.loads(params_json)), seed=seed, geojson=GEO)
@@ -832,13 +874,111 @@ $("layer").addEventListener("change", redraw);
 $("mapMain").addEventListener("click", pickAgent);
 $("mapMem").addEventListener("click", pickAgent);
 $("tRun").addEventListener("click", runTests);
+// ---------- sieć: plik, gotowy park albo OSM (poprawki sieci z PD, web/psm.py) ----------
+let psmReady = false;
+async function ensurePsm() {
+  if (psmReady) return;
+  const r = await fetch("psm.py", { cache: "no-cache" });
+  if (!r.ok) throw new Error(L("brak psm.py obok strony", "psm.py missing next to the page") + " (HTTP " + r.status + ")");
+  py.FS.writeFile("psm.py", await r.text());
+  psmReady = true;
+}
+async function useGeo(text, name, fix) {
+  if (fix) await ensurePsm();
+  py.globals.set("_geo_text", text);
+  py.globals.set("_geo_name", name);
+  const i = JSON.parse(py.runPython("_prep_geo(_geo_text, _geo_name, " + (fix ? "True" : "False") + ")"));
+  geoState = null;
+  const base = name + ": " + i.nodes + L(" węzłów, ", " nodes, ") + i.edges + L(" odcinków", " edges");
+  const how = i.processed ? L(" (gotowy, już po poprawkach)", " (ready, already corrected)")
+    : i.fixed ? L("; poprawiono sieć: ", "; network corrected: ") + L("skrzyżowania ", "junctions ") + i.junctions_before + " → " + i.junctions_after +
+        (i.bridges ? L(", łączniki kawałków ", ", links between parts ") + i.bridges : "") +
+        (i.dead_ends_linked ? L(", połączone ślepe końce ", ", dead ends joined ") + i.dead_ends_linked : "")
+    : L(" (bez poprawek)", " (as drawn, no corrections)");
+  $("geoInfo").textContent = base + how + L(". Kliknij Inicjalizuj.", ". Click Initialise.");
+  $("btnParkSave").disabled = false;
+}
 $("geoFile").addEventListener("change", async (ev) => {
   const f = ev.target.files[0]; if (!f || !py) return;
-  py.globals.set("_geo_text", await f.text());
+  try { await useGeo(await f.text(), f.name.replace(/\.(geo)?json$/i, ""), $("geoFix").checked); }
+  catch (e) { geoState = null; $("geoInfo").textContent = L("Błąd pliku ", "Error in file ") + f.name + ": " + pyError(e); }
+});
+$("geoFix").addEventListener("change", () => {
+  // ponownie wczytaj wybrany plik z nowym ustawieniem poprawek
+  if ($("geoFile").files[0]) $("geoFile").dispatchEvent(new Event("change"));
+});
+function parkName() {
+  const v = $("parkSel").value;
+  return v === "__custom" ? $("parkCustom").value.trim() : v;
+}
+$("parkSel").addEventListener("change", () => {
+  const custom = $("parkSel").value === "__custom";
+  $("parkCustomRow").hidden = !custom;
+  $("btnParkLib").disabled = custom;
+});
+let PARKS = null;
+$("btnParkLib").addEventListener("click", async () => {
+  if (!py) return;
+  const name = parkName();
+  $("btnParkLib").disabled = true;
   try {
-    const info = JSON.parse(py.runPython("sipd.PathNetwork.from_geojson(_geo_text); GEO = _geo_text; json.dumps({'ok': True})"));
-    if (info.ok) { geoState = null; $("geoInfo").textContent = L("Wczytano ", "Loaded ") + f.name + L(". Kliknij Inicjalizuj.", ". Click Initialise."); }
-  } catch (e) { geoState = null; $("geoInfo").textContent = L("Błąd pliku ", "Error in file ") + f.name + ": " + pyError(e); }
+    if (!PARKS) {
+      const r = await fetch("parki/index.json", { cache: "no-cache" });
+      if (!r.ok) throw new Error("parki/index.json: HTTP " + r.status);
+      PARKS = (await r.json()).parks;
+    }
+    const it = PARKS.find((p) => p.name === name);
+    if (!it) throw new Error(L("tego parku nie ma w bibliotece", "this park is not in the library"));
+    const r = await fetch("parki/" + it.file, { cache: "no-cache" });
+    if (!r.ok) throw new Error(it.file + ": HTTP " + r.status);
+    await useGeo(await r.text(), name, true);
+  } catch (e) { geoState = null; $("geoInfo").textContent = L("Nie udało się: ", "Failed: ") + (e.message || pyError(e)) + "."; }
+  finally { $("btnParkLib").disabled = $("parkSel").value === "__custom"; }
+});
+$("btnParkOsm").addEventListener("click", async () => {
+  if (!py) return;
+  const name = parkName();
+  if (!name) { $("geoInfo").textContent = L("Podaj nazwę parku.", "Enter a park name."); return; }
+  $("btnParkOsm").disabled = true;
+  geoState = null;
+  try {
+    await ensurePsm();
+    py.runPython("import psm");
+    const q = py.globals.get("psm").overpass_query(name);
+    const key = "osm:" + q;
+    let data = null, err = null;
+    try { data = localStorage.getItem(key); } catch (e) { data = null; }
+    for (const url of data === null ? ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter",
+                                        "https://overpass.private.coffee/api/interpreter"] : []) {
+      const host = new URL(url).host;
+      $("geoInfo").textContent = L("Pobieranie „", "Fetching “") + name + L("” z ", "” from ") + host + L("… (do 60 s)", "… (up to 60 s)");
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 60000);
+      try {
+        const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), signal: ctl.signal,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        if (!r.ok) throw new Error(host + ": HTTP " + r.status);
+        data = await r.text();
+        if (!data.trim().startsWith("{")) throw new Error(host + L(": odpowiedź nie jest JSON", ": the response is not JSON"));
+        try { localStorage.setItem(key, data); } catch (e) { /* za duże */ }
+        break;
+      } catch (e) {
+        data = null;
+        err = e.name === "AbortError" ? new Error(host + L(": brak odpowiedzi w 60 s", ": no response within 60 s")) : e;
+      } finally { clearTimeout(timer); }
+    }
+    if (data === null) throw err || new Error(L("brak odpowiedzi", "no response"));
+    if (!(JSON.parse(data).elements || []).some((e) => e.type === "way" && (e.tags || {}).highway))
+      throw new Error(L("OSM nie zwrócił ścieżek dla tej nazwy", "OSM returned no paths for this name"));
+    await useGeo(data, name, true);
+  } catch (e) {
+    $("geoInfo").textContent = L("Nie udało się: ", "Failed: ") + (e.message || pyError(e)) + L(". Spróbuj innej nazwy albo za chwilę.", ". Try another name or try again shortly.");
+  } finally { $("btnParkOsm").disabled = false; }
+});
+$("btnParkSave").addEventListener("click", () => {
+  const t = py && py.globals.get("GEO"); if (!t) return;
+  const name = py.globals.get("_GEO_NAME");
+  download(name.toLowerCase().replace(/\s+/g, "_") + ".geojson", t, "application/geo+json");
 });
 // ---------- Moduł 4: strefy odpoczynku z pliku lub z OSM ----------
 let ZONES = null;   // FeatureCollection punktów w układzie pliku sieci

@@ -522,7 +522,11 @@ class PathNetwork:
                     add_geom(sub)
 
         if data.get("type") == "FeatureCollection":
-            for f in data.get("features", []):
+            feats = data.get("features", [])
+            # plik z warstwami (np. z PD: roads/obstacles/boundary) - ścieżkami są tylko roads
+            if any((f.get("properties") or {}).get("layer") for f in feats):
+                feats = [f for f in feats if (f.get("properties") or {}).get("layer") in (None, "roads")]
+            for f in feats:
                 add_geom(f.get("geometry"))
         elif data.get("type") == "Feature":
             add_geom(data.get("geometry"))
@@ -3527,6 +3531,24 @@ def t_bank_with_rest_zones_and_export():
     h = dict(zip(COMPAT_HEADER, row))
     assert h["bank_on"] is True and 0.0 < h["bank_present_realised"] < 1.0
     assert not any(p.resting for p in m.players if not p.in_park)
+
+
+def t_geojson_layers_only_roads_are_paths():
+    road = lambda c: {"type": "Feature", "properties": {"layer": "roads"},
+                      "geometry": {"type": "LineString", "coordinates": c}}
+    fc = {"type": "FeatureCollection", "features": [
+        road([[0, 0], [100, 0]]), road([[100, 0], [100, 50]]),
+        {"type": "Feature", "properties": {"layer": "obstacles"},   # żywopłot jako linia
+         "geometry": {"type": "LineString", "coordinates": [[100, 50], [200, 50]]}},
+        {"type": "Feature", "properties": {"layer": "boundary"},
+         "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [100, 50], [0, 50], [0, 0]]]}}]}
+    net = PathNetwork.from_geojson(fc, crs="projected")
+    n_edges = lambda n: sum(len(v) for v in n.adj.values()) // 2
+    assert len(net.vertices) == 3 and n_edges(net) == 2, (len(net.vertices), n_edges(net))
+    # bez warstw wszystko jak dawniej (każda linia jest ścieżką)
+    for f in fc["features"]:
+        f["properties"] = {}
+    assert n_edges(PathNetwork.from_geojson(fc, crs="projected")) == 3
 
 
 def t_rest_zones_from_geojson_file():
