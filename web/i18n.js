@@ -191,6 +191,7 @@ const I18N_PARAM_EN = {
  "dest_placement": "Destination placement (no file)",
  "dest_dwell": "Mean stay at a destination (cycles)",
  "dest_per_visit": "Mean destinations per visit",
+ "dest_share": "Share of visitors with destinations",
  "entrance_file": "Entrance or park boundary file (GeoJSON)",
  "entrance_dist": "Entrance: distance from boundary (m)",
  "partner_distance": "Partner distance (euclid / network)",

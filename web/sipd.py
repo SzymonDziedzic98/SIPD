@@ -153,7 +153,8 @@ DEFAULTS = {
     "dest_count": 10,
     "dest_placement": "random",        # "random" | "dispersed" | "central" | "peripheral" (gdy brak pliku)
     "dest_dwell": 200,                 # średni pobyt w celu (cykle, rozkład wykładniczy)
-    "dest_per_visit": 2.0,             # średnia liczba celów na wizytę (rozkład geometryczny, min. 1)
+    "dest_per_visit": 2.0,
+    "dest_share": 1.0,                 # udział odwiedzających z celami; reszta błądzi losowo (spacer bez celu)             # średnia liczba celów na wizytę (rozkład geometryczny, min. 1)
     # wejścia: plik GeoJSON z punktami albo obrysem parku (wielokąt / warstwa boundary);
     # przy obrysie wejściem jest węzeł poza obrysem albo najwyżej entrance_dist m od niego
     "entrance_file": "",
@@ -277,6 +278,7 @@ GUI_PARAMETERS = [
         ("dest_placement", "Rozmieszczenie celów (bez pliku)"),
         ("dest_dwell", "Średni pobyt w celu (cykle)"),
         ("dest_per_visit", "Średnia liczba celów na wizytę"),
+        ("dest_share", "Udział odwiedzających z celami"),
         ("entrance_file", "Plik wejść lub obrysu parku (GeoJSON)"),
         ("entrance_dist", "Wejście: odległość od obrysu (m)"),
         ("partner_distance", "Odległość do partnera (euclid / network)"),
@@ -921,6 +923,7 @@ class Player:
         self.dwell_left = 0           # cykle pobytu w celu
         self.dests_left = 0           # ile celów zostało w tej wizycie
         self.wants_exit = False       # bank: wizyta się kończy, idzie do wyjścia
+        self.purposeful = True        # ma cele (False = spacer bez celu, tylko wejście i wyjście)
         self.exit_start = 0
         self.dwell_cycles = 0
         self.character = character
@@ -1708,6 +1711,8 @@ class Model:
             raise ModelError("dest_dwell i dest_per_visit muszą być >= 1: %s, %s" % (P.dest_dwell, P.dest_per_visit))
         if P.dest_placement not in ("dispersed", "central", "peripheral", "random"):
             raise ModelError("dest_placement: dispersed / central / peripheral / random, nie %s" % P.dest_placement)
+        if not (0.0 <= P.dest_share <= 1.0):
+            raise ModelError("dest_share musi być w [0, 1]: %s" % P.dest_share)
         self.dest_rng = random.Random(zlib.crc32(("dest-%d" % self.seed).encode()))
         if P.dest_file:
             self.dests = self._rest_zones_from_file(P.dest_file, "celów")
@@ -1717,6 +1722,10 @@ class Model:
         self.entrance_set = frozenset(self.entrances)
         self.dest_hops = {d: self._next_hop_to([d]) for d in self.dests}
         self.dest_hops["exit"] = self._next_hop_to(self.entrances)
+        if P.dest_share < 1.0:                   # osobny generator: te same cele przy każdym udziale
+            share_rng = random.Random(zlib.crc32(("dest-share-%d" % self.seed).encode()))
+            for p in self.players:
+                p.purposeful = share_rng.random() < P.dest_share
         for p in self.players:
             if p.in_park:
                 self.dest_start_trip(p)
@@ -1767,6 +1776,12 @@ class Model:
     def dest_start_trip(self, p):
         """Nowa wizyta: liczba celów z rozkładu geometrycznego (średnia dest_per_visit, min. 1)."""
         rng = self.dest_rng
+        p.dwell_left = 0
+        p.wants_exit = False
+        if not p.purposeful:                     # spacer bez celu: ruch losowy do końca wizyty
+            p.goal = p.goal_kind = None
+            p.dests_left = 0
+            return
         k = 1
         while rng.random() > 1.0 / self.p.dest_per_visit:
             k += 1
@@ -2266,8 +2281,8 @@ class Model:
             + [P.bank_on, P.bank_present_share if P.bank_on else "n/a", P.bank_mean_stay if P.bank_on else "n/a"]
             + self.bank_metrics()
             + [P.movement_mode, P.partner_distance]
-            + ([len(self.dests), len(self.entrances), P.dest_dwell, P.dest_per_visit] if self.dest_hops is not None
-               else ["n/a"] * 4)
+            + ([len(self.dests), len(self.entrances), P.dest_dwell, P.dest_per_visit, P.dest_share]
+               if self.dest_hops is not None else ["n/a"] * 5)
             + self.dest_metrics())
 
     def _kin_columns(self):
@@ -2554,7 +2569,7 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "rest_bouts_per_agent", "frail_share_realised",
                  "bank_on", "bank_present_share", "bank_mean_stay", "bank_present_realised", "bank_visits_per_agent",
                  "bank_cross_visit_share", "movement_mode", "partner_distance", "dest_count", "entrance_count",
-                 "dest_dwell", "dest_per_visit", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent"]
+                 "dest_dwell", "dest_per_visit", "dest_share", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent"]
 
 CSV_HEADERS = {
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
@@ -3952,8 +3967,20 @@ def t_dest_entrances_from_boundary():
     os.unlink(fh.name)
 
 
+def t_dest_share_mixes_walkers():
+    m = _dest_model(dest_share=0.5)
+    k = sum(p.purposeful for p in m.players)
+    assert 50 < k < 100, k
+    assert all(p.goal is None for p in m.players if not p.purposeful)
+    m.run(500)
+    assert all(p.dwell_cycles == 0 for p in m.players if not p.purposeful)
+    assert any(p.dwell_cycles > 0 for p in m.players if p.purposeful)
+    a, b = _dest_model(dest_share=0.0), _dest_model(dest_share=1.0)
+    assert a.dests == b.dests and not any(p.purposeful for p in a.players)
+
+
 def t_dest_bad_params_rejected():
-    for kw in (dict(movement_mode="cele"), dict(partner_distance="manhattan"), dict(dest_dwell=0),
+    for kw in (dict(movement_mode="cele"), dict(partner_distance="manhattan"), dict(dest_dwell=0), dict(dest_share=1.5),
                dict(dest_per_visit=0.5), dict(dest_placement="edge")):
         try:
             _dest_model(**kw)
