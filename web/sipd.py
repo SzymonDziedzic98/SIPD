@@ -156,7 +156,8 @@ DEFAULTS = {
     "dest_per_visit": 2.0,
     "dest_share": 1.0,                 # udział odwiedzających z celami; reszta błądzi losowo (spacer bez celu)             # średnia liczba celów na wizytę (rozkład geometryczny, min. 1)
     # wejścia: plik GeoJSON z punktami albo obrysem parku (wielokąt / warstwa boundary);
-    # przy obrysie wejściem jest węzeł poza obrysem albo najwyżej entrance_dist m od niego
+    # przy obrysie wejściem jest węzeł wewnątrz, z którego ścieżka wychodzi poza obrys,
+    # albo ślepy koniec najwyżej entrance_dist m od obrysu
     "entrance_file": "",
     "entrance_dist": 20.0,
     # odległość przy szukaniu partnera: "euclid" (linia prosta, jak dotąd) albo "network" (po ścieżkach)
@@ -1731,8 +1732,9 @@ class Model:
                 self.dest_start_trip(p)
 
     def _entrances(self):
-        """Wejścia: punkty z entrance_file -> najbliższe węzły; obrys (layer boundary / Polygon) -> węzły poza nim
-        albo najwyżej entrance_dist m od niego; bez pliku - liście sieci w zewnętrznym pasie (r >= 0,75 r_max)."""
+        """Wejścia: punkty z entrance_file -> najbliższe węzły; obrys (layer boundary / Polygon) -> węzły wewnątrz,
+        z których krawędź wychodzi poza obrys, i ślepe końce najwyżej entrance_dist m od obrysu;
+        bez pliku - liście sieci w zewnętrznym pasie (r >= 0,75 r_max)."""
         P, net = self.p, self.network
         comp = sorted(net.largest_component() if P.network_cleanup else [v for v in net.adj if net.adj[v]])
         if not P.entrance_file:
@@ -1764,11 +1766,17 @@ class Model:
                 if v is not None and v not in ent:
                     ent.append(v)
         elif rings:
+            inside = {v: any(_point_in_ring(net.vertices[v], rg) for rg in rings) for v in comp}
+            near = {v: min(_dist_to_ring(net.vertices[v], rg) for rg in rings) <= P.entrance_dist for v in comp}
             for v in comp:
-                q = net.vertices[v]
-                inside = any(_point_in_ring(q, rg) for rg in rings)
-                if not inside or min(_dist_to_ring(q, rg) for rg in rings) <= P.entrance_dist:
+                if not inside[v]:
+                    continue
+                crossing = any(u in inside and not inside[u] for u in net.adj[v])    # ścieżka przecina obrys
+                dead_end = len(net.adj[v]) == 1 and near[v]                         # ślepy koniec przy obrysie
+                if crossing or dead_end:
                     ent.append(v)
+            if not ent:                           # sieć w całości wewnątrz: węzły przy obrysie
+                ent = [v for v in comp if near[v]]
         if not ent:
             raise ModelError("Plik wejść %s nie daje żadnego wejścia." % P.entrance_file)
         return ent
@@ -3952,7 +3960,9 @@ def t_dest_entrances_from_boundary():
     assert abs(_dist_to_ring((5, 5), ring) - 5) < 1e-9 and abs(_dist_to_ring((12, 5), ring) - 2) < 1e-9
     gj = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "properties": {"layer": "roads"},
-         "geometry": {"type": "LineString", "coordinates": [[0, 0], [100, 0], [200, 0]]}},
+         "geometry": {"type": "LineString", "coordinates": [[0, 0], [100, 0]]}},
+        {"type": "Feature", "properties": {"layer": "roads"},
+         "geometry": {"type": "LineString", "coordinates": [[100, 0], [200, 0]]}},
         {"type": "Feature", "properties": {"layer": "roads"},
          "geometry": {"type": "LineString", "coordinates": [[100, 0], [100, 100]]}},
         {"type": "Feature", "properties": {"layer": "boundary"},
@@ -3963,7 +3973,7 @@ def t_dest_entrances_from_boundary():
     m = Model(Params(compat_core=True, compat_N=6, network_cleanup=True, movement_mode="destinations",
                      dest_count=2, entrance_file=fh.name, entrance_dist=20.0), seed=1, network=net)
     ent = sorted(tuple(round(c) for c in net.to_geo(*net.vertices[v])) for v in m.entrances)
-    assert ent == [(0, 0), (200, 0)], ent       # (0,0) 10 m od obrysu, (200,0) poza nim; (100,0) i (100,100) w środku
+    assert ent == [(0, 0), (100, 0)], ent       # (0,0) ślepy koniec 10 m od obrysu, z (100,0) ścieżka wychodzi do (200,0)
     os.unlink(fh.name)
 
 
