@@ -1514,6 +1514,7 @@ class Model:
         self.exit_walk_n = 0
         self.dest_arrivals = 0
         self.dest_exits = 0
+        self._edge_len = {}           # id(polilinii krawędzi) -> długość
         self._net_dist = {}           # partner_distance = network: węzeł -> {węzeł: odległość <= promień}
         self.bank_present_sum = 0
         self.bank_samples = 0
@@ -1828,7 +1829,9 @@ class Model:
         """Położenie na sieci: (węzeł a, odl. od a, węzeł b, odl. od b)."""
         net = self.network
         if p.path and p.prev_node is not None and p.target_node is not None and p.prev_node != p.target_node:
-            L = _polyline_length(p.path)
+            L = self._edge_len.get(id(p.path))
+            if L is None:
+                L = self._edge_len[id(p.path)] = _polyline_length(p.path)
             d = min(p.path_pos, L)
             return p.prev_node, d, p.target_node, L - d
         return p.current_node, 0.0, p.current_node, 0.0
@@ -1853,9 +1856,9 @@ class Model:
             self._net_dist[v] = d
         return d
 
-    def network_distance(self, a, b, radius):
+    def network_distance(self, a, b, radius, pos_a=None):
         """Odległość po sieci między graczami (math.inf, gdy większa niż radius)."""
-        a1, da1, a2, da2 = self._net_pos(a)
+        a1, da1, a2, da2 = pos_a or self._net_pos(a)
         b1, db1, b2, db2 = self._net_pos(b)
         best = math.inf
         if {a1, a2} == {b1, b2} and a1 != a2:          # ta sama krawędź
@@ -2064,7 +2067,8 @@ class Model:
                     if q is not me and q.in_park and (q._loc[0] - x) ** 2 + (q._loc[1] - y) ** 2 <= r2:
                         found.append(q)
         if self.p.partner_distance == "network" and self.p.real_env and not self.p.well_mixed:
-            found = [q for q in found if self.network_distance(me, q, radius) <= radius]
+            pm = self._net_pos(me)
+            found = [q for q in found if self.network_distance(me, q, radius, pm) <= radius]
         found.sort(key=lambda q: q.idx)
         return found
 
