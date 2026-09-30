@@ -37,6 +37,7 @@ import random
 import statistics as st
 import sys
 import time
+import zlib
 from multiprocessing import Pool
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -102,11 +103,16 @@ def done_signatures(path, keys):
 
 def run(args):
     jobs = build_jobs(args.experiments, set(args.N), args.repeat, args.end_cycle)
+    keys = sorted({k for n in args.experiments for k in sipd.BATCH_EXPERIMENTS[n]["among"]})
+    if args.shard:
+        # porcja K/N: przydział po sumie kontrolnej parametrów przebiegu (stały przy wznowieniach)
+        k, n = (int(x) for x in args.shard.split("/"))
+        jobs = [j for j in jobs if zlib.crc32(repr(job_signature(j[0], j[1], keys)).encode()) % n == k]
     resume = args.resume and os.path.exists(args.out)
-    if resume:
+    done_files = ([args.out] if resume else []) + [p for p in args.also_done if os.path.exists(p)]
+    if done_files:
         # klucze = parametry przeglądane w eksperymentach (wszystkie są kolumnami compat CSV)
-        keys = sorted({k for n in args.experiments for k in sipd.BATCH_EXPERIMENTS[n]["among"]})
-        done = done_signatures(args.out, keys)
+        done = set().union(*(done_signatures(p, keys) for p in done_files))
         before = len(jobs)
         jobs = [j for j in jobs if job_signature(j[0], j[1], keys) not in done]
         print("wznowienie: %d z %d przebiegów już zapisanych" % (before - len(jobs), before), flush=True)
@@ -548,6 +554,8 @@ def main():
     ap.add_argument("--out", default="compat_results.csv")
     ap.add_argument("--ts-out", help="plik szeregów czasowych (domyślnie <out>_timeseries.csv)")
     ap.add_argument("--interleave", action="store_true", help="kolejność: powtórzenie po powtórzeniu")
+    ap.add_argument("--shard", help="porcja K/N przebiegów (np. 1/4) do liczenia równolegle w kilku sesjach")
+    ap.add_argument("--also-done", nargs="*", default=[], help="dodatkowe pliki compat CSV z gotowymi przebiegami")
     ap.add_argument("--resume", action="store_true", help="dopisz tylko przebiegi, których nie ma jeszcze w --out")
     ap.add_argument("--verdict", metavar="CSV", help="tylko policz werdykty z istniejącego pliku")
     a = ap.parse_args()
