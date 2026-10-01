@@ -31,6 +31,7 @@ import io
 import itertools
 import json
 import math
+import os
 import random
 import sys
 import time
@@ -145,6 +146,22 @@ DEFAULTS = {
     "bank_on": False,
     "bank_present_share": 0.25,        # oczekiwany udział puli obecny w parku (stan ustalony)
     "bank_mean_stay": 1000,            # średnia długość wizyty w cyklach (rozkład geometryczny)
+    # --- Moduł 6: ruch z wejściami i celami (movement_mode = "destinations"; domyślnie wyłączony) ---
+    # agent wchodzi wejściem, idzie najkrótszą drogą do kolejnych celów, zostaje w każdym na chwilę,
+    # potem idzie do najbliższego wejścia i wychodzi (z bankiem: do banku; bez banku: wraca innym wejściem)
+    "dest_file": "",                   # GeoJSON z punktami celów (ławki, place zabaw); pusty = dest_count węzłów
+    "dest_count": 10,
+    "dest_placement": "random",        # "random" | "dispersed" | "central" | "peripheral" (gdy brak pliku)
+    "dest_dwell": 200,                 # średni pobyt w celu (cykle, rozkład wykładniczy)
+    "dest_per_visit": 2.0,
+    "dest_share": 1.0,                 # udział odwiedzających z celami; reszta błądzi losowo (spacer bez celu)             # średnia liczba celów na wizytę (rozkład geometryczny, min. 1)
+    # wejścia: plik GeoJSON z punktami albo obrysem parku (wielokąt / warstwa boundary);
+    # przy obrysie wejściem jest węzeł wewnątrz, z którego ścieżka wychodzi poza obrys,
+    # albo ślepy koniec najwyżej entrance_dist m od obrysu
+    "entrance_file": "",
+    "entrance_dist": 20.0,
+    # odległość przy szukaniu partnera: "euclid" (linia prosta, jak dotąd) albo "network" (po ścieżkach)
+    "partner_distance": "euclid",
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
     "kin_export": False,               # family_timeseries.csv
@@ -255,6 +272,18 @@ GUI_PARAMETERS = [
         ("bank_present_share", "Udział puli obecny w parku"),
         ("bank_mean_stay", "Średnia długość wizyty (cykle)"),
     ]),
+    ("Moduł 6 – wejścia i cele ruchu", [
+        ("movement_mode", "Tryb ruchu (default / destinations)"),
+        ("dest_file", "Plik celów (GeoJSON z punktami)"),
+        ("dest_count", "Liczba celów (bez pliku)"),
+        ("dest_placement", "Rozmieszczenie celów (bez pliku)"),
+        ("dest_dwell", "Średni pobyt w celu (cykle)"),
+        ("dest_per_visit", "Średnia liczba celów na wizytę"),
+        ("dest_share", "Udział odwiedzających z celami"),
+        ("entrance_file", "Plik wejść lub obrysu parku (GeoJSON)"),
+        ("entrance_dist", "Wejście: odległość od obrysu (m)"),
+        ("partner_distance", "Odległość do partnera (euclid / network)"),
+    ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
         ("sample_interval", "Co ile cykli próbka"),
@@ -298,6 +327,29 @@ def _dist(a, b):
 
 def _polyline_length(pts):
     return sum(_dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+
+
+def _point_in_ring(q, ring):
+    """Test parzystości przecięć (ring zamknięty lub nie)."""
+    x, y = q
+    inside = False
+    n = len(ring)
+    for k in range(n):
+        (x1, y1), (x2, y2) = ring[k], ring[(k + 1) % n]
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def _dist_to_ring(q, ring):
+    best = math.inf
+    for k in range(len(ring) - 1):
+        (x1, y1), (x2, y2) = ring[k], ring[k + 1]
+        dx, dy = x2 - x1, y2 - y1
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((q[0] - x1) * dx + (q[1] - y1) * dy) / L2))
+        best = min(best, math.hypot(q[0] - x1 - t * dx, q[1] - y1 - t * dy))
+    return best
 
 
 class PathNetwork:
@@ -865,6 +917,16 @@ class Player:
         self.in_park = True
         self.visit_no = 0
         self.first_met_visit = {}     # partner -> numer mojej wizyty, w której go poznałem
+        # Moduł 6: cel ruchu (bez wpływu na nic przy movement_mode = default)
+        self.prev_node = None         # węzeł, z którego agent wyszedł na bieżącą krawędź
+        self.goal = None              # węzeł celu albo wejścia, do którego idzie
+        self.goal_kind = None         # "dest" | "exit"
+        self.dwell_left = 0           # cykle pobytu w celu
+        self.dests_left = 0           # ile celów zostało w tej wizycie
+        self.wants_exit = False       # bank: wizyta się kończy, idzie do wyjścia
+        self.purposeful = True        # ma cele (False = spacer bez celu, tylko wejście i wyjście)
+        self.exit_start = 0
+        self.dwell_cycles = 0
         self.character = character
         self.enemy = None
         self.forgiveness = 0.05
@@ -1217,6 +1279,10 @@ class Player:
         """Wybór następnego węzła - jedno miejsce na tryby ruchu (Faza 5: "schelling")."""
         if self.model.p.movement_mode == "schelling":
             raise ModelError("movement_mode = schelling: do implementacji w Fazie 5.")
+        if self.model.dest_hops is not None and self.goal is not None:
+            hop = self.model.dest_next_hop(self.goal_kind, self.goal, self.current_node)
+            if hop is not None and hop in candidates:
+                return hop                 # Moduł 6: najkrótsza droga do celu albo wyjścia
         if self.model.rest_next_hop is not None and self.energy < self.model.p.rest_threshold:
             hop = self.model.rest_next_hop.get(self.current_node)
             if hop is not None and hop in candidates:
@@ -1250,6 +1316,7 @@ class Player:
             new_target = self.choose_direction(neighbors)
             self.path = net.adj[self.current_node][new_target]
             self.path_pos = 0.0
+            self.prev_node = self.current_node
             self.target_node = new_target
             self.current_node = new_target
 
@@ -1341,8 +1408,28 @@ class Player:
             return True
         return False
 
+    def reflex_destination(self):
+        """Moduł 6: True = agent stoi w celu w tym cyklu (gra z sąsiadami, nie idzie dalej)."""
+        m = self.model
+        if self.dwell_left > 0:
+            self.dwell_left -= 1
+            self.dwell_cycles += 1
+            if self.dwell_left == 0:
+                m.dest_next_goal(self)
+            return True
+        if self.goal is not None and m.dest_at_goal(self) and (self.target_node is None or self._at_target()):
+            m.dest_arrived(self)
+            return self.dwell_left > 0
+        return False
+
     def step(self):
         P = self.model.p
+        if self.model.dest_hops is not None and self.reflex_destination():
+            if P.unlimited_games or self.height == 0:
+                self.reflex_do_you_wanna_play()
+            return
+        if not self.in_park:               # Moduł 6: wyszedł wyjściem w tym cyklu
+            return
         if self.model.rest_next_hop is not None and self.reflex_rest():
             if P.unlimited_games or self.height == 0:
                 self.reflex_do_you_wanna_play()
@@ -1422,6 +1509,17 @@ class Model:
         self.rest_games = self.rest_bouts = 0
         self.bank_rng = None          # Moduł 5: osobny generator rotacji
         self.bank_nodes = []
+        self.dest_hops = None         # Moduł 6: cel -> {węzeł: następny węzeł}; "exit" -> do najbliższego wejścia
+        self.dest_rng = None
+        self.dests = []
+        self.entrances = []
+        self.entrance_set = frozenset()
+        self.exit_walk_sum = 0         # bank + cele: suma i liczba marszów do wyjścia (cykle)
+        self.exit_walk_n = 0
+        self.dest_arrivals = 0
+        self.dest_exits = 0
+        self._edge_len = {}           # id(polilinii krawędzi) -> długość
+        self._net_dist = {}           # partner_distance = network: węzeł -> {węzeł: odległość <= promień}
         self.bank_present_sum = 0
         self.bank_samples = 0
         self.bank_entries = 0
@@ -1503,6 +1601,12 @@ class Model:
             self._setup_rest_zones()
         if P.bank_on:
             self._setup_bank()
+        if P.movement_mode == "destinations":
+            self._setup_destinations()
+        elif P.movement_mode not in ("default", "schelling"):
+            raise ModelError("movement_mode: default / destinations / schelling, nie %s" % P.movement_mode)
+        if P.partner_distance not in ("euclid", "network"):
+            raise ModelError("partner_distance: euclid / network, nie %s" % P.partner_distance)
 
     def _setup_rest_zones(self):
         """Moduł 4: strefy odpoczynku w węzłach sieci + zmęczenie z dwóch rozkładów normalnych.
@@ -1520,6 +1624,11 @@ class Model:
             zones = self._rest_zones_from_file(P.rest_zone_file)
             self._finish_rest_setup(zones, rng)
             return
+        self._finish_rest_setup(self._place_nodes(P.rest_zone_count, P.rest_zone_placement, rng), rng)
+
+    def _place_nodes(self, count, placement, rng):
+        """count węzłów sieci: random, dispersed (najdalszy punkt), central, peripheral."""
+        P, net = self.p, self.network
         comp = net.largest_component() if P.network_cleanup else [v for v in net.adj if net.adj[v]]
         nodes = sorted(comp)
         cx = sum(net.vertices[v][0] for v in nodes) / len(nodes)
@@ -1527,9 +1636,9 @@ class Model:
         r = {v: _dist(net.vertices[v], (cx, cy)) for v in nodes}
         rmax = max(r.values()) or 1.0
         pool = {"central": [v for v in nodes if r[v] <= 0.35 * rmax],
-                "peripheral": [v for v in nodes if r[v] >= 0.75 * rmax]}.get(P.rest_zone_placement, nodes)
-        k = max(1, min(int(P.rest_zone_count), len(pool)))
-        if P.rest_zone_placement == "random":
+                "peripheral": [v for v in nodes if r[v] >= 0.75 * rmax]}.get(placement, nodes)
+        k = max(1, min(int(count), len(pool)))
+        if placement == "random":
             zones = rng.sample(pool, k)
         else:                          # najdalszy punkt: strefy równomiernie w obrębie puli
             zones = [rng.choice(pool)]
@@ -1539,7 +1648,7 @@ class Model:
                 zones.append(nxt)
                 for v in pool:
                     d[v] = min(d[v], _dist(net.vertices[v], net.vertices[nxt]))
-        self._finish_rest_setup(zones, rng)
+        return zones
 
     def rest_zones_geojson(self):
         """Bieżące strefy odpoczynku (węzły sieci) jako GeoJSON w układzie pliku sieci (albo modelu, gdy sieć syntetyczna)."""
@@ -1553,7 +1662,7 @@ class Model:
                           "geometry": {"type": "Point", "coordinates": [x, y]}})
         return json.dumps({"type": "FeatureCollection", "features": feats})
 
-    def _rest_zones_from_file(self, path):
+    def _rest_zones_from_file(self, path, what="stref"):
         """Punkty (lub środki innych geometrii) z GeoJSON -> najbliższe węzły sieci, bez powtórzeń."""
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -1561,7 +1670,7 @@ class Model:
         zones = []
         for ft in feats:
             g = ft.get("geometry") if ft.get("type") == "Feature" else ft
-            if not g:
+            if not g or (ft.get("properties") or {}).get("layer") in ("roads", "obstacles", "boundary"):
                 continue
             pts = []
 
@@ -1577,7 +1686,7 @@ class Model:
             if v is not None and v not in zones:
                 zones.append(v)
         if not zones:
-            raise ModelError("Plik stref %s nie zawiera żadnego punktu." % path)
+            raise ModelError("Plik %s %s nie zawiera żadnego punktu." % (what, path))
         return zones
 
     def _finish_rest_setup(self, zones, rng):
@@ -1591,6 +1700,202 @@ class Model:
                       else (P.fatigue_regular_mean, P.fatigue_regular_sd))
             p.fatigue = max(0.005, rng.gauss(mu, sd)) / 100.0     # na metr
             p.energy = rng.uniform(P.rest_threshold, 1.0)         # różny stan na starcie
+
+    def _setup_destinations(self):
+        """Moduł 6: cele (plik albo dest_count węzłów) i wejścia (plik punktów/obrysu albo liście sieci na obrzeżu).
+        Osobny generator (seed przebiegu), więc strategie i położenia startowe są te same co w trybie default."""
+        P = self.p
+        if not P.real_env or P.well_mixed:
+            self.warnings.append("Moduł 6 (wejścia i cele) działa tylko na sieci - pominięty.")
+            return
+        if P.dest_dwell < 1 or P.dest_per_visit < 1:
+            raise ModelError("dest_dwell i dest_per_visit muszą być >= 1: %s, %s" % (P.dest_dwell, P.dest_per_visit))
+        if P.dest_placement not in ("dispersed", "central", "peripheral", "random"):
+            raise ModelError("dest_placement: dispersed / central / peripheral / random, nie %s" % P.dest_placement)
+        if not (0.0 <= P.dest_share <= 1.0):
+            raise ModelError("dest_share musi być w [0, 1]: %s" % P.dest_share)
+        self.dest_rng = random.Random(zlib.crc32(("dest-%d" % self.seed).encode()))
+        if P.dest_file:
+            self.dests = self._rest_zones_from_file(P.dest_file, "celów")
+        else:
+            self.dests = self._place_nodes(P.dest_count, P.dest_placement, self.dest_rng)
+        self.entrances = self._entrances()
+        self.entrance_set = frozenset(self.entrances)
+        self.dest_hops = {d: self._next_hop_to([d]) for d in self.dests}
+        self.dest_hops["exit"] = self._next_hop_to(self.entrances)
+        if P.dest_share < 1.0:                   # osobny generator: te same cele przy każdym udziale
+            share_rng = random.Random(zlib.crc32(("dest-share-%d" % self.seed).encode()))
+            for p in self.players:
+                p.purposeful = share_rng.random() < P.dest_share
+        for p in self.players:
+            if p.in_park:
+                self.dest_start_trip(p)
+
+    def _entrances(self):
+        """Wejścia: punkty z entrance_file -> najbliższe węzły; obrys (layer boundary / Polygon) -> węzły wewnątrz,
+        z których krawędź wychodzi poza obrys, i ślepe końce najwyżej entrance_dist m od obrysu;
+        bez pliku - liście sieci w zewnętrznym pasie (r >= 0,75 r_max)."""
+        P, net = self.p, self.network
+        comp = sorted(net.largest_component() if P.network_cleanup else [v for v in net.adj if net.adj[v]])
+        if not P.entrance_file:
+            cx = sum(net.vertices[v][0] for v in comp) / len(comp)
+            cy = sum(net.vertices[v][1] for v in comp) / len(comp)
+            r = {v: _dist(net.vertices[v], (cx, cy)) for v in comp}
+            rmax = max(r.values()) or 1.0
+            ent = [v for v in comp if len(net.adj[v]) == 1 and r[v] >= 0.75 * rmax]
+            return ent or self._place_nodes(8, "peripheral", self.dest_rng)
+        with open(P.entrance_file, encoding="utf-8") as fh:
+            data = json.load(fh)
+        feats = data.get("features", []) if data.get("type") == "FeatureCollection" else [data]
+        pts, rings = [], []
+        for ft in feats:
+            g = ft.get("geometry") if ft.get("type") == "Feature" else ft
+            layer = (ft.get("properties") or {}).get("layer")
+            if not g or layer in ("roads", "obstacles"):
+                continue
+            if g["type"] == "Point" and layer != "boundary":
+                pts.append(net.to_local(*g["coordinates"][:2]))
+            elif g["type"] in ("Polygon", "MultiPolygon") and layer in ("boundary", None):
+                polys = [g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]
+                for poly in polys:
+                    rings.append([net.to_local(*c[:2]) for c in poly[0]])
+        ent = []
+        if pts:
+            for pt in pts:
+                v = net.closest_vertex(pt, largest_only=P.network_cleanup)
+                if v is not None and v not in ent:
+                    ent.append(v)
+        elif rings:
+            inside = {v: any(_point_in_ring(net.vertices[v], rg) for rg in rings) for v in comp}
+            near = {v: min(_dist_to_ring(net.vertices[v], rg) for rg in rings) <= P.entrance_dist for v in comp}
+            for v in comp:
+                if not inside[v]:
+                    continue
+                crossing = any(u in inside and not inside[u] for u in net.adj[v])    # ścieżka przecina obrys
+                dead_end = len(net.adj[v]) == 1 and near[v]                         # ślepy koniec przy obrysie
+                if crossing or dead_end:
+                    ent.append(v)
+            if not ent:                           # sieć w całości wewnątrz: węzły przy obrysie
+                ent = [v for v in comp if near[v]]
+        if not ent:
+            raise ModelError("Plik wejść %s nie daje żadnego wejścia." % P.entrance_file)
+        return ent
+
+    def dest_start_trip(self, p):
+        """Nowa wizyta: liczba celów z rozkładu geometrycznego (średnia dest_per_visit, min. 1)."""
+        rng = self.dest_rng
+        p.dwell_left = 0
+        p.wants_exit = False
+        if not p.purposeful:                     # spacer bez celu: ruch losowy do końca wizyty
+            p.goal = p.goal_kind = None
+            p.dests_left = 0
+            return
+        k = 1
+        while rng.random() > 1.0 / self.p.dest_per_visit:
+            k += 1
+        p.dests_left = k
+        p.dwell_left = 0
+        p.wants_exit = False
+        self.dest_next_goal(p)
+
+    def dest_next_goal(self, p):
+        """Kolejny cel (losowy, osiągalny, inny niż bieżący węzeł) albo wyjście."""
+        cands = [d for d in self.dests if d != p.current_node and p.current_node in self.dest_hops[d]]
+        if p.wants_exit or p.dests_left <= 0 or not cands:
+            p.goal, p.goal_kind = "exit", "exit"
+        else:
+            p.goal, p.goal_kind = self.dest_rng.choice(cands), "dest"
+
+    def dest_next_hop(self, kind, goal, node):
+        return self.dest_hops["exit" if kind == "exit" else goal].get(node)
+
+    def dest_at_goal(self, p):
+        if p.goal_kind == "exit":
+            return p.current_node in self.entrance_set
+        return p.current_node == p.goal
+
+    def dest_arrived(self, p):
+        """W celu: pobyt z rozkładu wykładniczego. W wyjściu: z bankiem - wyjście z parku,
+        bez banku - powrót losowym wejściem z nową wizytą."""
+        if p.goal_kind == "dest":
+            self.dest_arrivals += 1
+            p.dests_left -= 1
+            p.dwell_left = max(1, int(round(self.dest_rng.expovariate(1.0 / self.p.dest_dwell))))
+            return
+        self.dest_exits += 1
+        if self.bank_rng is not None and p.wants_exit:
+            self.exit_walk_sum += self.cycle - p.exit_start
+            self.exit_walk_n += 1
+            self._bank_leave(p)
+            return
+        self._dest_enter(p)
+
+    def _dest_enter(self, p):
+        v = self.dest_rng.choice(self.entrances)
+        p.current_node = v
+        p.prev_node = None
+        p.location = self.network.vertices[v]
+        p.target_node = None
+        p.path = None
+        p.path_pos = 0.0
+        self.dest_start_trip(p)
+
+    def dest_metrics(self):
+        """Udział agento-cykli w celach, dotarcia do celów i wyjścia na agenta."""
+        if self.dest_hops is None:
+            return ["n/a"] * 3
+        n = max(1, len(self.players))
+        return [sum(p.dwell_cycles for p in self.players) / max(1, n * self.cycle),
+                self.dest_arrivals / n, self.dest_exits / n]
+
+    def _net_pos(self, p):
+        """Położenie na sieci: (węzeł a, odl. od a, węzeł b, odl. od b)."""
+        net = self.network
+        if p.path and p.prev_node is not None and p.target_node is not None and p.prev_node != p.target_node:
+            L = self._edge_len.get(id(p.path))
+            if L is None:
+                L = self._edge_len[id(p.path)] = _polyline_length(p.path)
+            d = min(p.path_pos, L)
+            return p.prev_node, d, p.target_node, L - d
+        return p.current_node, 0.0, p.current_node, 0.0
+
+    def _dist_from(self, v, radius):
+        """Odległości sieciowe z v do węzłów najwyżej radius (Dijkstra z odcięciem, zapamiętane)."""
+        d = self._net_dist.get(v)
+        if d is None:
+            import heapq
+            net = self.network
+            d = {v: 0.0}
+            heap = [(0.0, v)]
+            while heap:
+                dv, u = heapq.heappop(heap)
+                if dv > d.get(u, math.inf):
+                    continue
+                for w, pl in net.adj[u].items():
+                    dw = dv + _polyline_length(pl)
+                    if dw <= radius and dw < d.get(w, math.inf):
+                        d[w] = dw
+                        heapq.heappush(heap, (dw, w))
+            self._net_dist[v] = d
+        return d
+
+    def network_distance(self, a, b, radius, pos_a=None):
+        """Odległość po sieci między graczami (math.inf, gdy większa niż radius)."""
+        a1, da1, a2, da2 = pos_a or self._net_pos(a)
+        b1, db1, b2, db2 = self._net_pos(b)
+        best = math.inf
+        if {a1, a2} == {b1, b2} and a1 != a2:          # ta sama krawędź
+            pa = da1 if a1 == b1 else da2
+            best = abs(pa - db1)
+        for u, du in ((a1, da1), (a2, da2)):
+            if du > radius:
+                continue
+            dist_u = self._dist_from(u, radius)
+            for w, dw in ((b1, db1), (b2, db2)):
+                x = dist_u.get(w)
+                if x is not None:
+                    best = min(best, du + x + dw)
+        return best if best <= radius + 1e-9 else math.inf
 
     def _setup_bank(self):
         """Moduł 5: pula compat_N odwiedzających; na starcie w parku losowy udział bank_present_share.
@@ -1618,6 +1923,7 @@ class Model:
     def _bank_leave(self, p):
         p.in_park = False
         p.resting = False
+        p.wants_exit, p.dwell_left, p.goal = False, 0, None
         p.target_node = None
         p.path = None
         p.path_pos = 0.0
@@ -1627,7 +1933,9 @@ class Model:
         p.in_park = True
         p.visit_no += 1
         self.bank_entries += 1
-        if self.bank_nodes:                      # wejście w losowym węźle sieci
+        if self.dest_hops is not None:           # Moduł 6: wejście losowym wejściem, nowa wizyta
+            self._dest_enter(p)
+        elif self.bank_nodes:                    # wejście w losowym węźle sieci
             v = self.bank_rng.choice(self.bank_nodes)
             p.current_node = v
             p.location = self.network.vertices[v]
@@ -1641,9 +1949,15 @@ class Model:
         q_leave = 1.0 / P.bank_mean_stay
         s = P.bank_present_share
         q_return = 1.0 if s >= 1.0 else min(1.0, q_leave * s / (1.0 - s))
+        if self.dest_hops is not None and self.exit_walk_n and s < 1.0:   # Moduł 6: wizyta = pobyt + marsz do wyjścia
+            q_return = min(1.0, s / ((1.0 - s) * (P.bank_mean_stay + self.exit_walk_sum / self.exit_walk_n)))
         for p in self.players:
             if p.in_park:
-                if s < 1.0 and rng.random() < q_leave:
+                if self.dest_hops is not None:          # Moduł 6: koniec wizyty = marsz do wyjścia
+                    if not p.wants_exit and s < 1.0 and rng.random() < q_leave:
+                        p.wants_exit, p.dwell_left, p.exit_start = True, 0, self.cycle
+                        p.goal, p.goal_kind = "exit", "exit"
+                elif s < 1.0 and rng.random() < q_leave:
                     self._bank_leave(p)
             elif rng.random() < q_return:
                 self._bank_enter(p)
@@ -1775,6 +2089,9 @@ class Model:
                 for q in self._grid.get((kx + dx, ky + dy), ()):
                     if q is not me and q.in_park and (q._loc[0] - x) ** 2 + (q._loc[1] - y) ** 2 <= r2:
                         found.append(q)
+        if self.p.partner_distance == "network" and self.p.real_env and not self.p.well_mixed:
+            pm = self._net_pos(me)
+            found = [q for q in found if self.network_distance(me, q, radius, pm) <= radius]
         found.sort(key=lambda q: q.idx)
         return found
 
@@ -1970,7 +2287,11 @@ class Model:
             + [P.rest_on, (len(self.rest_zones) if P.rest_zone_file else P.rest_zone_count) if P.rest_on else "n/a",
                ("file" if P.rest_zone_file else P.rest_zone_placement) if P.rest_on else "n/a"] + self.rest_metrics()
             + [P.bank_on, P.bank_present_share if P.bank_on else "n/a", P.bank_mean_stay if P.bank_on else "n/a"]
-            + self.bank_metrics())
+            + self.bank_metrics()
+            + [P.movement_mode, P.partner_distance]
+            + ([len(self.dests), len(self.entrances), P.dest_dwell, P.dest_per_visit, P.dest_share]
+               if self.dest_hops is not None else ["n/a"] * 5)
+            + self.dest_metrics())
 
     def _kin_columns(self):
         P = self.p
@@ -2255,7 +2576,8 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "rest_on", "rest_zone_count", "rest_zone_placement", "rest_time_share", "rest_games_share",
                  "rest_bouts_per_agent", "frail_share_realised",
                  "bank_on", "bank_present_share", "bank_mean_stay", "bank_present_realised", "bank_visits_per_agent",
-                 "bank_cross_visit_share"]
+                 "bank_cross_visit_share", "movement_mode", "partner_distance", "dest_count", "entrance_count",
+                 "dest_dwell", "dest_per_visit", "dest_share", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent"]
 
 CSV_HEADERS = {
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
@@ -3586,6 +3908,144 @@ def t_rest_zones_from_geojson_file():
         assert all(f["properties"]["layer"] == "rest_zones" for f in out["features"])
     finally:
         os.remove(path)
+
+
+def _dest_model(**kw):
+    base = dict(compat_core=True, compat_N=150, compat_mix="equal", network_cleanup=True, synthetic_grid=16,
+                vision_radius=30, player_speed=2.0, log_games=False, movement_mode="destinations",
+                dest_count=4, dest_dwell=20, dest_per_visit=2.0)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def t_dest_off_is_inert():
+    m = _dest_model(movement_mode="default")
+    assert m.dest_hops is None and m.dest_rng is None and m.dest_metrics() == ["n/a"] * 3
+    m.run(30)
+    assert all(p.goal is None and p.dwell_cycles == 0 for p in m.players)
+
+
+def t_dest_same_population_with_and_without():
+    a = _dest_model(movement_mode="default")
+    b = _dest_model()
+    assert [(p.character, p.current_node) for p in a.players] == [(p.character, p.current_node) for p in b.players]
+
+
+def t_dest_agents_reach_destinations_and_exits():
+    m = _dest_model()
+    assert len(m.dests) == 4 and m.entrances and all(p.goal is not None for p in m.players)
+    m.run(1500)
+    share, arr, ex = m.dest_metrics()
+    assert arr > 1.0 and ex > 0.3 and 0.0 < share < 1.0, (share, arr, ex)
+    # pobyt tylko w węzłach celów
+    for p in m.players:
+        if p.dwell_left > 0:
+            assert p.current_node in m.dests
+
+
+def t_dest_next_hop_moves_closer():
+    m = _dest_model()
+    d = m.dests[0]
+    hops = m.dest_hops[d]
+    assert d not in hops and all(u in m.network.adj[v] for v, u in hops.items())
+
+
+def t_dest_entrances_from_boundary():
+    import tempfile
+    m = _dest_model(movement_mode="default")
+    net = m.network
+    # sieć syntetyczna nie ma GeoJSON: sprawdzamy _point_in_ring i _dist_to_ring wprost
+    ring = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+    assert _point_in_ring((5, 5), ring) and not _point_in_ring((15, 5), ring)
+    assert abs(_dist_to_ring((5, 5), ring) - 5) < 1e-9 and abs(_dist_to_ring((12, 5), ring) - 2) < 1e-9
+    gj = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"layer": "roads"},
+         "geometry": {"type": "LineString", "coordinates": [[0, 0], [100, 0]]}},
+        {"type": "Feature", "properties": {"layer": "roads"},
+         "geometry": {"type": "LineString", "coordinates": [[100, 0], [200, 0]]}},
+        {"type": "Feature", "properties": {"layer": "roads"},
+         "geometry": {"type": "LineString", "coordinates": [[100, 0], [100, 100]]}},
+        {"type": "Feature", "properties": {"layer": "boundary"},
+         "geometry": {"type": "Polygon", "coordinates": [[[-10, -50], [150, -50], [150, 150], [-10, 150], [-10, -50]]]}}]}
+    net = PathNetwork.from_geojson(gj)
+    with tempfile.NamedTemporaryFile("w", suffix=".geojson", delete=False) as fh:
+        json.dump(gj, fh)
+    m = Model(Params(compat_core=True, compat_N=6, network_cleanup=True, movement_mode="destinations",
+                     dest_count=2, entrance_file=fh.name, entrance_dist=20.0), seed=1, network=net)
+    ent = sorted(tuple(round(c) for c in net.to_geo(*net.vertices[v])) for v in m.entrances)
+    assert ent == [(0, 0), (100, 0)], ent       # (0,0) ślepy koniec 10 m od obrysu, z (100,0) ścieżka wychodzi do (200,0)
+    os.unlink(fh.name)
+
+
+def t_dest_share_mixes_walkers():
+    m = _dest_model(dest_share=0.5)
+    k = sum(p.purposeful for p in m.players)
+    assert 50 < k < 100, k
+    assert all(p.goal is None for p in m.players if not p.purposeful)
+    m.run(500)
+    assert all(p.dwell_cycles == 0 for p in m.players if not p.purposeful)
+    assert any(p.dwell_cycles > 0 for p in m.players if p.purposeful)
+    a, b = _dest_model(dest_share=0.0), _dest_model(dest_share=1.0)
+    assert a.dests == b.dests and not any(p.purposeful for p in a.players)
+
+
+def t_dest_bad_params_rejected():
+    for kw in (dict(movement_mode="cele"), dict(partner_distance="manhattan"), dict(dest_dwell=0), dict(dest_share=1.5),
+               dict(dest_per_visit=0.5), dict(dest_placement="edge")):
+        try:
+            _dest_model(**kw)
+        except ModelError:
+            continue
+        raise AssertionError(kw)
+
+
+def t_dest_with_bank_leaves_through_exit():
+    m = _dest_model(compat_N=400, bank_on=True, bank_present_share=0.25, bank_mean_stay=200)
+    left = []
+    orig = m._bank_leave
+
+    def spy(p):
+        if m.cycle > 0:
+            left.append(p.current_node)
+        orig(p)
+    m._bank_leave = spy
+    m.run(1500)
+    assert left and all(v in m.entrance_set for v in left)
+    share = m.bank_metrics()[0]
+    assert 0.15 < share < 0.35, share
+    assert all(p.goal_kind in ("dest", "exit") for p in m.players if p.in_park)
+
+
+def t_network_distance_filters_euclid():
+    m = _dest_model(movement_mode="default", partner_distance="network")
+    m.run(20)
+    n_net = n_euc = 0
+    for p in m.players[:60]:
+        net_found = m.players_within(p, 30)
+        m.p.partner_distance = "euclid"
+        euc_found = m.players_within(p, 30)
+        m.p.partner_distance = "network"
+        assert set(net_found) <= set(euc_found)
+        for q in net_found:
+            assert m.network_distance(p, q, 30) >= _dist(p.location, q.location) - 1e-6
+        n_net += len(net_found)
+        n_euc += len(euc_found)
+    assert n_net <= n_euc
+
+
+def t_network_distance_same_edge():
+    m = _dest_model(movement_mode="default")
+    a, b = m.players[0], m.players[1]
+    v = a.current_node
+    u = m.network.neighbors(v)[0]
+    L = _polyline_length(m.network.adj[v][u])
+    for p, pos in ((a, 0.3 * L), (b, 0.8 * L)):
+        p.prev_node, p.target_node, p.current_node = v, u, u
+        p.path, p.path_pos = m.network.adj[v][u], pos
+    assert abs(m.network_distance(a, b, 1e9) - 0.5 * L) < 1e-6
+    b.prev_node, b.target_node, b.path = u, v, m.network.adj[u][v]
+    b.path_pos = 0.2 * L                          # ten sam punkt co 0,8 L w drugą stronę
+    assert abs(m.network_distance(a, b, 1e9) - 0.5 * L) < 1e-6
 
 
 TESTS = [(name[2:], fn) for name, fn in sorted(globals().items()) if name.startswith("t_") and callable(fn)]

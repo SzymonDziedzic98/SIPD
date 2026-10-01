@@ -166,6 +166,7 @@ const I18N_CAT_EN = {
  "Diagnostyka": "Diagnostics",
  "Moduł 4 – strefy odpoczynku": "Module 4 – rest zones",
  "Moduł 5 – bank odwiedzających": "Module 5 – visitor bank",
+ "Moduł 6 – wejścia i cele ruchu": "Module 6 – entrances and destinations",
  "Pozostałe (poza GUI w GAMA)": "Other (not in the GAMA GUI)"
 };
 const I18N_PARAM_EN = {
@@ -184,6 +185,16 @@ const I18N_PARAM_EN = {
  "bank_on": "Visitor turnover (bank)",
  "bank_present_share": "Share of pool present in the park",
  "bank_mean_stay": "Mean visit length (cycles)",
+ "movement_mode": "Movement mode (default / destinations)",
+ "dest_file": "Destination file (GeoJSON points)",
+ "dest_count": "Number of destinations (no file)",
+ "dest_placement": "Destination placement (no file)",
+ "dest_dwell": "Mean stay at a destination (cycles)",
+ "dest_per_visit": "Mean destinations per visit",
+ "dest_share": "Share of visitors with destinations",
+ "entrance_file": "Entrance or park boundary file (GeoJSON)",
+ "entrance_dist": "Entrance: distance from boundary (m)",
+ "partner_distance": "Partner distance (euclid / network)",
  "selected_index": "Selected agent (index)",
  "show_social_links": "Show social relation lines",
  "social_link_threshold": "Line drawing threshold",
