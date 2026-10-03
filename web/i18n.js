@@ -195,6 +195,8 @@ const I18N_PARAM_EN = {
  "entrance_file": "Entrance or park boundary file (GeoJSON)",
  "entrance_dist": "Entrance: distance from boundary (m)",
  "partner_distance": "Partner distance (euclid / network)",
+ "bypass_on": "Bypass around the park (bypass layer)",
+ "through_share": "Share of people walking through the park",
  "selected_index": "Selected agent (index)",
  "show_social_links": "Show social relation lines",
  "social_link_threshold": "Line drawing threshold",
