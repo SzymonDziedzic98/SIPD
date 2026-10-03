@@ -186,6 +186,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <input type="text" id="seed" placeholder="losowy"></div>
     <div class="field wide"><label for="preset">Wczytaj ustawienia z</label>
       <select id="preset"><option value="">—</option></select></div>
+    <p class="hint" id="presetDesc" data-noi18n></p>
     <div class="source">
     <h3>Park</h3>
     <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
@@ -281,6 +282,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <button class="btn primary" id="bRun">Uruchom</button>
       <button class="btn" id="bStop" disabled>Zatrzymaj</button>
     </div>
+    <p id="bDesc" data-noi18n style="margin: 0"></p>
     <p class="hint" id="bSpec"></p>
     <progress id="bProg" value="0" max="1"></progress>
     <p class="hint mono" id="bProgTxt" data-noi18n>—</p>
@@ -507,13 +509,33 @@ function buildForm() {
       const lab = document.createElement("label"); lab.htmlFor = "p_" + key;
       lab.dataset.pl = label; lab.dataset.key = key; lab.textContent = L(label, I18N_PARAM_EN[key] || label);
       row.append(lab, inputFor(key));
+      if (PARAM_HELP[key]) UX.paramHelp(lab, () => paramHelpText(key));
       f.append(row);
     });
     d.append(f); form.append(d);
   });
   const sel = $("preset");
   Object.keys(EXPS).forEach((k) => sel.add(new Option(k, k)));
-  sel.addEventListener("change", () => { if (sel.value) applyPreset(sel.value); });
+  sel.addEventListener("change", () => { if (sel.value) applyPreset(sel.value); renderScenarioTitles(); });
+}
+function paramHelpText(key) {
+  const h = PARAM_HELP[key];
+  return L(h[0], h[1]) + L(" Domyślnie w modelu: ", " Model default: ") + UX.fmtValue(DEFAULTS[key]) + "." +
+    (RESTART_KEYS.has(key) ? L(" Działa po kliknięciu Inicjalizuj (↻).", " Takes effect after clicking Initialise (↻).") : "");
+}
+// opis scenariusza: co sprawdza + pełny rozmiar (powtórzenia × kombinacje, cykle)
+function scenarioText(name) {
+  const e = EXPS[name], h = SCENARIO_HELP[name];
+  if (!e) return "";
+  const combos = Object.values(e.among || {}).reduce((a, v) => a * v.length, 1);
+  const cycles = e.until === "end_cycle" ? (e.params.end_cycle || DEFAULTS.end_cycle) : (e.params[e.until] || DEFAULTS[e.until]);
+  const n = e.repeat * combos;
+  return (h ? L(h[0], h[1]) + " " : "") +
+    L(`Pełny eksperyment: ${n} przebiegów po ${cycles.toLocaleString("pl-PL")} cykli.`, `Full experiment: ${n} runs of ${cycles.toLocaleString("en-GB")} cycles.`);
+}
+function renderScenarioTitles() {
+  for (const sel of [$("preset"), $("bExp")]) for (const o of sel.options) if (o.value) o.title = scenarioText(o.value);
+  $("presetDesc").textContent = $("preset").value ? scenarioText($("preset").value) : "";
 }
 function applyPreset(name) {
   const e = EXPS[name];
@@ -1119,6 +1141,8 @@ function renderNet() {
 function renderSpec() {
   const e = EXPS[$("bExp").value];
   if (!e) return;
+  $("bDesc").textContent = scenarioText($("bExp").value);
+  renderScenarioTitles();
   const shown = Object.entries(e.params).filter(([k]) => !["variant_name", "log_games"].includes(k))
     .map(([k, v]) => k + "=" + v).join(", ");
   const among = Object.entries(e.among || {}).map(([k, v]) => k + " ∈ {" + v.join(", ") + "}").join("; ");
@@ -1181,6 +1205,7 @@ $("btnReset").onclick = () => {
   if (!SET) return;
   SET.reset();
   $("preset").value = "";
+  renderScenarioTitles();
   setMsg = ["Przywrócono ustawienia startowe. Kliknij Inicjalizuj, żeby ich użyć.", "Default settings restored. Click Initialise to use them."];
   renderSetInfo();
 };
