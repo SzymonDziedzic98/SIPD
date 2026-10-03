@@ -97,6 +97,7 @@ details.cat > summary {
 .field input[type="checkbox"] { justify-self: start; width: 16px; height: 16px; accent-color: var(--park); }
 .controls .field { grid-template-columns: auto minmax(110px, 190px); }
 .field.stack { grid-template-columns: minmax(0, 1fr); }
+.field.wide { grid-template-columns: minmax(0, 1fr) 170px; }
 .field input[type="file"] { max-width: 100%; font-size: 12px; }
 .field.restart label::after { content: " ↻"; color: var(--accent); }
 .hint { font-size: 12px; color: var(--muted); margin: 0; }
@@ -181,14 +182,14 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <input type="number" id="speed" min="1" max="500" value="5"></div>
     <div class="field"><label for="seed">Seed (puste = losowy)</label>
       <input type="text" id="seed" placeholder="losowy"></div>
-    <div class="field"><label for="preset">Wczytaj ustawienia z</label>
+    <div class="field wide"><label for="preset">Wczytaj ustawienia z</label>
       <select id="preset"><option value="">—</option></select></div>
     <div class="field stack"><label for="geoFile">Sieć ścieżek (GeoJSON)</label>
       <input type="file" id="geoFile" accept=".geojson,.json"></div>
     <div class="field"><label for="geoFix" title="Łączenie rozłącznych kawałków (do 50 m), ścieżek równoległych (3 m), skrzyżowań (6 m) i ślepych końców (25 m), jak w PD">Popraw sieć z OSM</label>
       <input type="checkbox" id="geoFix" checked></div>
     <p class="hint" id="geoInfo" data-noi18n>Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
-    <div class="field"><label for="parkSel">Park z OSM</label>
+    <div class="field wide"><label for="parkSel">Park z OSM</label>
       <select id="parkSel">
         <option>Park Staszica</option>
         <option>Park Szczytnicki</option>
@@ -197,7 +198,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <option>Park Zachodni</option>
         <option value="__custom">inna nazwa…</option>
       </select></div>
-    <div class="field" id="parkCustomRow" hidden><label for="parkCustom">Nazwa w OSM</label>
+    <div class="field wide" id="parkCustomRow" hidden><label for="parkCustom">Nazwa w OSM</label>
       <input type="text" id="parkCustom" placeholder="np. Park Tołpy"></div>
     <div class="controls">
       <button class="btn" id="btnParkLib" title="Park z biblioteki strony, już po poprawkach, bez pobierania z OSM">Wczytaj gotowy</button>
@@ -423,6 +424,7 @@ def _meta():
   buildBatch();
   buildLegend(meta.characters);
   loadDemoPreset();
+  sortSelects();
   $("loading").hidden = true;
   initModel();
 }
@@ -1122,6 +1124,7 @@ I18N.onChange(() => {
   document.querySelectorAll("#paramForm summary").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_CAT_EN[el.dataset.pl] || el.dataset.pl); });
   document.querySelectorAll("#paramForm label[data-key]").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_PARAM_EN[el.dataset.key] || el.dataset.pl); });
   runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo();
+  sortSelects();
   for (const ch of [chartScore, chartDunbar, chartShares]) {
     if (!ch) continue;
     ch.options.scales.x.title.text = L("cykl", "cycle");
@@ -1132,6 +1135,7 @@ I18N.onChange(() => {
 renderGeoInfo();
 renderZoneInfo();
 runLabel();
+sortSelects();
 
 buildSimDownloads();
 boot();
