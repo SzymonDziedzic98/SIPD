@@ -162,6 +162,10 @@ DEFAULTS = {
     "entrance_dist": 20.0,
     # odległość przy szukaniu partnera: "euclid" (linia prosta, jak dotąd) albo "network" (po ścieżkach)
     "partner_distance": "euclid",
+    # obejście wokół parku (warstwa "bypass" w entrance_file): korzystają z niego tylko przechodzący
+    "bypass_on": False,
+    # udział przechodzących: wchodzą jednym wejściem i idą najkrótszą drogą do przeciwległego (0 = brak)
+    "through_share": 0.0,
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
     "kin_export": False,               # family_timeseries.csv
@@ -283,6 +287,8 @@ GUI_PARAMETERS = [
         ("entrance_file", "Plik wejść lub obrysu parku (GeoJSON)"),
         ("entrance_dist", "Wejście: odległość od obrysu (m)"),
         ("partner_distance", "Odległość do partnera (euclid / network)"),
+        ("bypass_on", "Obejście wokół parku (warstwa bypass)"),
+        ("through_share", "Udział przechodzących przez park"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -925,6 +931,8 @@ class Player:
         self.dests_left = 0           # ile celów zostało w tej wizycie
         self.wants_exit = False       # bank: wizyta się kończy, idzie do wyjścia
         self.purposeful = True        # ma cele (False = spacer bez celu, tylko wejście i wyjście)
+        self.through = False          # przechodzący: wejście -> przeciwległe wejście
+        self.used_bypass = False      # przechodzący szedł w tej wędrówce obejściem
         self.exit_start = 0
         self.dwell_cycles = 0
         self.character = character
@@ -1309,11 +1317,16 @@ class Player:
     def reflex_choose_target(self):
         net = self.model.network
         neighbors = net.neighbors(self.current_node)
+        out = self.model.outside
+        if out and not self.through:
+            neighbors = [u for u in neighbors if (self.current_node, u) not in out] or neighbors
         if not neighbors:
             self.target_node = self.current_node
             self.path = None
         else:
             new_target = self.choose_direction(neighbors)
+            if out and (self.current_node, new_target) in out:
+                self.used_bypass = True
             self.path = net.adj[self.current_node][new_target]
             self.path_pos = 0.0
             self.prev_node = self.current_node
@@ -1517,6 +1530,10 @@ class Model:
         self.exit_walk_sum = 0         # bank + cele: suma i liczba marszów do wyjścia (cykle)
         self.exit_walk_n = 0
         self.dest_arrivals = 0
+        self.outside = None           # krawędzie obejścia (a, b) w obu kierunkach; None = brak obejścia
+        self.through_hops = None      # wejście -> {węzeł: następny węzeł} po całej sieci z obejściem
+        self.through_trips = 0
+        self.through_bypass_trips = 0
         self.dest_exits = 0
         self._edge_len = {}           # id(polilinii krawędzi) -> długość
         self._net_dist = {}           # partner_distance = network: węzeł -> {węzeł: odległość <= promień}
@@ -1721,8 +1738,20 @@ class Model:
             self.dests = self._place_nodes(P.dest_count, P.dest_placement, self.dest_rng)
         self.entrances = self._entrances()
         self.entrance_set = frozenset(self.entrances)
-        self.dest_hops = {d: self._next_hop_to([d]) for d in self.dests}
-        self.dest_hops["exit"] = self._next_hop_to(self.entrances)
+        if not (0.0 <= P.through_share <= 1.0):
+            raise ModelError("through_share musi być w [0, 1]: %s" % P.through_share)
+        if P.bypass_on:
+            self._add_bypass()
+        self.dest_hops = {d: self._next_hop_to([d], skip=self.outside) for d in self.dests}
+        self.dest_hops["exit"] = self._next_hop_to(self.entrances, skip=self.outside)
+        if P.through_share > 0:                  # osobny generator: reszta przebiegu bez zmian przy 0
+            if len(self.entrances) < 2:
+                raise ModelError("Przechodzący wymagają co najmniej dwóch wejść.")
+            t_rng = random.Random(zlib.crc32(("through-%d" % self.seed).encode()))
+            for p in self.players:
+                p.through = t_rng.random() < P.through_share
+            self.opposite = self._opposite_entrances()
+            self.through_hops = {e: self._next_hop_to([e]) for e in self.entrances}
         if P.dest_share < 1.0:                   # osobny generator: te same cele przy każdym udziale
             share_rng = random.Random(zlib.crc32(("dest-share-%d" % self.seed).encode()))
             for p in self.players:
@@ -1786,6 +1815,14 @@ class Model:
         rng = self.dest_rng
         p.dwell_left = 0
         p.wants_exit = False
+        if p.through:                            # przechodzący: do przeciwległego wejścia
+            p.dests_left = 0
+            p.used_bypass = False
+            p.goal_kind = "through"
+            p.goal = self.opposite.get(p.current_node)
+            if p.goal is None:                   # start poza wejściem (pierwsza wizyta): losowe wejście
+                p.goal = rng.choice([e for e in self.entrances if e != p.current_node])
+            return
         if not p.purposeful:                     # spacer bez celu: ruch losowy do końca wizyty
             p.goal = p.goal_kind = None
             p.dests_left = 0
@@ -1807,16 +1844,29 @@ class Model:
             p.goal, p.goal_kind = self.dest_rng.choice(cands), "dest"
 
     def dest_next_hop(self, kind, goal, node):
+        if kind == "through":
+            return self.through_hops[goal].get(node)
         return self.dest_hops["exit" if kind == "exit" else goal].get(node)
 
     def dest_at_goal(self, p):
+        if p.goal_kind == "through":
+            return p.current_node == p.goal
         if p.goal_kind == "exit":
             return p.current_node in self.entrance_set
         return p.current_node == p.goal
 
     def dest_arrived(self, p):
         """W celu: pobyt z rozkładu wykładniczego. W wyjściu: z bankiem - wyjście z parku,
-        bez banku - powrót losowym wejściem z nową wizytą."""
+        bez banku - powrót losowym wejściem z nową wizytą. Przechodzący po dojściu wychodzi
+        (z bankiem do banku, bez banku wraca losowym wejściem)."""
+        if p.goal_kind == "through":
+            self.through_trips += 1
+            self.through_bypass_trips += p.used_bypass
+            if self.bank_rng is not None:
+                self._bank_leave(p)
+            else:
+                self._dest_enter(p)
+            return
         if p.goal_kind == "dest":
             self.dest_arrivals += 1
             p.dests_left -= 1
@@ -1839,6 +1889,62 @@ class Model:
         p.path = None
         p.path_pos = 0.0
         self.dest_start_trip(p)
+
+    def _add_bypass(self):
+        """Obejście: linie warstwy "bypass" z entrance_file dołączone jako krawędzie między wejściami.
+        Kopia sieci (sieć wejściowa bywa współdzielona między przebiegami); bez nowych węzłów."""
+        import copy
+        P, net = self.p, self.network
+        if not P.entrance_file:
+            raise ModelError("bypass_on wymaga entrance_file z warstwą bypass.")
+        with open(P.entrance_file, encoding="utf-8") as fh:
+            data = json.load(fh)
+        lines = [ft["geometry"]["coordinates"] for ft in data.get("features", [])
+                 if (ft.get("properties") or {}).get("layer") == "bypass"
+                 and (ft.get("geometry") or {}).get("type") == "LineString"]
+        if not lines:
+            raise ModelError("bypass_on: brak warstwy bypass w %s" % P.entrance_file)
+        new = copy.copy(net)
+        new.adj = {v: dict(nb) for v, nb in net.adj.items()}
+        new._largest = None
+        new._stats = None
+        out = set()
+        for ln in lines:
+            pl = [net.to_local(*c[:2]) for c in ln]
+            a = net.closest_vertex(pl[0], largest_only=P.network_cleanup)
+            b = net.closest_vertex(pl[-1], largest_only=P.network_cleanup)
+            if _dist(net.vertices[a], pl[0]) > 0.5 or _dist(net.vertices[b], pl[-1]) > 0.5:
+                raise ModelError("bypass_on: koniec obejścia nie trafia w węzeł sieci (wejście).")
+            if a == b or b in new.adj[a]:
+                continue
+            pl = [net.vertices[a]] + pl[1:-1] + [net.vertices[b]]
+            new.adj[a][b] = pl
+            new.adj[b][a] = list(reversed(pl))
+            out.add((a, b)); out.add((b, a))
+        self.network = new
+        self.outside = frozenset(out)
+
+    def _opposite_entrances(self):
+        """Wejście -> przeciwległe: kierunek od środka parku najbliższy odwrotnemu (remis: dalsze)."""
+        net = self.network
+        comp = net.largest_component()
+        cx = sum(net.vertices[v][0] for v in comp) / len(comp)
+        cy = sum(net.vertices[v][1] for v in comp) / len(comp)
+        ang = {e: math.atan2(net.vertices[e][1] - cy, net.vertices[e][0] - cx) for e in self.entrances}
+        res = {}
+        for e in self.entrances:
+            def score(f):
+                d = abs((ang[f] - ang[e]) % (2 * math.pi) - math.pi)
+                return (round(d, 6), -_dist(net.vertices[e], net.vertices[f]))
+            res[e] = min((f for f in self.entrances if f != e), key=score)
+        return res
+
+    def through_metrics(self):
+        """Wędrówki przechodzących na agenta i udział wędrówek z odcinkiem obejścia."""
+        if self.through_hops is None:
+            return ["n/a"] * 2
+        return [self.through_trips / max(1, len(self.players)),
+                self.through_bypass_trips / self.through_trips if self.through_trips else "n/a"]
 
     def dest_metrics(self):
         """Udział agento-cykli w celach, dotarcia do celów i wyjścia na agenta."""
@@ -1954,6 +2060,8 @@ class Model:
         for p in self.players:
             if p.in_park:
                 if self.dest_hops is not None:          # Moduł 6: koniec wizyty = marsz do wyjścia
+                    if p.through:                       # przechodzący wychodzi, gdy dojdzie
+                        continue
                     if not p.wants_exit and s < 1.0 and rng.random() < q_leave:
                         p.wants_exit, p.dwell_left, p.exit_start = True, 0, self.cycle
                         p.goal, p.goal_kind = "exit", "exit"
@@ -1974,8 +2082,9 @@ class Model:
                 sum(p.visit_no for p in self.players) / n,
                 self.bank_cross_visit / max(1, self.bank_games)]
 
-    def _next_hop_to(self, targets):
-        """Dijkstra z wielu źródeł po długościach krawędzi: dla każdego węzła sąsiad bliżej najbliższej strefy."""
+    def _next_hop_to(self, targets, skip=None):
+        """Dijkstra z wielu źródeł po długościach krawędzi: dla każdego węzła sąsiad bliżej najbliższej strefy.
+        skip: krawędzie (a, b) pomijane (obejście dla odwiedzających)."""
         import heapq
         net = self.network
         dist = {t: 0.0 for t in targets}
@@ -1987,6 +2096,8 @@ class Model:
             if dv > dist.get(v, math.inf):
                 continue
             for u, pl in net.adj[v].items():
+                if skip and (v, u) in skip:
+                    continue
                 du = dv + _polyline_length(pl)
                 if du < dist.get(u, math.inf):
                     dist[u] = du
@@ -2291,7 +2402,8 @@ class Model:
             + [P.movement_mode, P.partner_distance]
             + ([len(self.dests), len(self.entrances), P.dest_dwell, P.dest_per_visit, P.dest_share]
                if self.dest_hops is not None else ["n/a"] * 5)
-            + self.dest_metrics())
+            + self.dest_metrics()
+            + [P.bypass_on, P.through_share] + self.through_metrics())
 
     def _kin_columns(self):
         P = self.p
@@ -2577,7 +2689,8 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "rest_bouts_per_agent", "frail_share_realised",
                  "bank_on", "bank_present_share", "bank_mean_stay", "bank_present_realised", "bank_visits_per_agent",
                  "bank_cross_visit_share", "movement_mode", "partner_distance", "dest_count", "entrance_count",
-                 "dest_dwell", "dest_per_visit", "dest_share", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent"]
+                 "dest_dwell", "dest_per_visit", "dest_share", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent",
+                 "bypass_on", "through_share", "through_trips_per_agent", "through_bypass_share"]
 
 CSV_HEADERS = {
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
@@ -3975,6 +4088,82 @@ def t_dest_entrances_from_boundary():
     ent = sorted(tuple(round(c) for c in net.to_geo(*net.vertices[v])) for v in m.entrances)
     assert ent == [(0, 0), (100, 0)], ent       # (0,0) ślepy koniec 10 m od obrysu, z (100,0) ścieżka wychodzi do (200,0)
     os.unlink(fh.name)
+
+
+def _bypass_park():
+    """Kwadrat 100 x 100 m: krzyż ścieżek, wejścia w środkach boków, obejście po obwodzie.
+    Droga parkiem z (0,50) do (50,0) idzie łukiem przez (25,90), więc obejście (100 m) jest krótsze."""
+    import tempfile
+    L = lambda c, layer="roads": {"type": "Feature", "properties": {"layer": layer},
+                                  "geometry": {"type": "LineString", "coordinates": c}}
+    gj = {"type": "FeatureCollection", "features": [
+        L([[0, 50], [25, 90], [50, 50]]), L([[50, 50], [100, 50]]), L([[50, 0], [50, 50]]), L([[50, 50], [50, 100]]),
+        {"type": "Feature", "properties": {"layer": "boundary"},
+         "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]]}},
+        L([[0, 50], [0, 0], [50, 0]], "bypass"), L([[50, 0], [100, 0], [100, 50]], "bypass"),
+        L([[100, 50], [100, 100], [50, 100]], "bypass"), L([[50, 100], [0, 100], [0, 50]], "bypass")]
+        + [{"type": "Feature", "properties": {"layer": "entrances"}, "geometry": {"type": "Point", "coordinates": c}}
+           for c in ([0, 50], [50, 0], [100, 50], [50, 100])]}
+    fh = tempfile.NamedTemporaryFile("w", suffix=".geojson", delete=False)
+    json.dump(gj, fh)
+    fh.close()
+    return PathNetwork.from_geojson(gj, crs="projected"), fh.name
+
+
+def _bypass_model(net, fn, **kw):
+    base = dict(compat_core=True, compat_N=40, network_cleanup=True, movement_mode="destinations", dest_count=2,
+                dest_dwell=5, entrance_file=fn, player_speed=2.0, log_games=False)
+    base.update(kw)
+    return Model(Params(**base), seed=7, network=net)
+
+
+def t_bypass_off_is_inert():
+    net, fn = _bypass_park()
+    a, b = _bypass_model(net, fn), _bypass_model(net, fn, bypass_on=False, through_share=0.0)
+    assert a.outside is None and a.through_hops is None and a.through_metrics() == ["n/a"] * 2
+    a.run(200); b.run(200)
+    assert [p.location for p in a.players] == [p.location for p in b.players]
+    assert sum(len(nb) for nb in net.adj.values()) == 8          # sieć wejściowa bez obejścia
+    os.unlink(fn)
+
+
+def t_bypass_only_for_through_walkers():
+    net, fn = _bypass_park()
+    m = _bypass_model(net, fn, bypass_on=True, through_share=0.5)
+    assert len(m.outside) == 8 and sum(len(nb) for nb in net.adj.values()) == 8   # kopia, wejściowa nietknięta
+    assert all((v, u) not in m.outside for d, h in m.dest_hops.items() for v, u in h.items())
+    for _ in range(600):
+        m.step()
+        for p in m.players:
+            if not p.through and p.prev_node is not None and p.target_node is not None:
+                assert (p.prev_node, p.target_node) not in m.outside
+    trips, share = m.through_metrics()
+    assert trips > 0.5 and 0.0 <= share <= 1.0, (trips, share)   # na przeciwległe wejście krócej przez park
+    os.unlink(fn)
+
+
+def t_through_opposite_and_shorter_route():
+    net, fn = _bypass_park()
+    m = _bypass_model(net, fn, bypass_on=True, through_share=1.0)
+    geo = lambda v: tuple(round(c) for c in m.network.to_geo(*m.network.vertices[v]))
+    opp = {geo(e): geo(f) for e, f in m.opposite.items()}
+    assert opp[(0, 50)] == (100, 50) and opp[(50, 0)] == (50, 100), opp
+    v = {geo(e): e for e in m.entrances}
+    hop = m.through_hops[v[(50, 0)]][v[(0, 50)]]
+    assert (v[(0, 50)], hop) in m.outside           # obejście krótsze niż łuk przez park
+    assert all(p.through for p in m.players)
+    os.unlink(fn)
+
+
+def t_through_share_validated():
+    net, fn = _bypass_park()
+    for kw in (dict(through_share=1.5), dict(bypass_on=True, entrance_file="")):
+        try:
+            _bypass_model(net, fn, **kw)
+        except ModelError:
+            continue
+        raise AssertionError(kw)
+    os.unlink(fn)
 
 
 def t_dest_share_mixes_walkers():
