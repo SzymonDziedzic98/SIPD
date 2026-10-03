@@ -102,7 +102,6 @@ function sortSelects(root = document) {
 
 // słownik PL → EN dla tekstów statycznych index.html (klucz: tekst po zwinięciu spacji)
 const I18N_EN = {
- "Strefy odpoczynku (GeoJSON z punktami)": "Rest zones (GeoJSON points)",
  "Pobierz ławki i stoły z OSM": "Fetch benches and tables from OSM",
  "Popraw sieć z OSM": "Correct OSM network",
  "Łączenie rozłącznych kawałków (do 50 m), ścieżek równoległych (3 m), skrzyżowań (6 m) i ślepych końców (25 m), jak w PD": "Joins separate parts (up to 50 m), parallel paths (3 m), junctions (6 m) and dead ends (25 m), as in PD",
@@ -115,6 +114,11 @@ const I18N_EN = {
  "Pobierz z OSM": "Fetch from OSM",
  "Ścieżki parku z Overpass API (Wrocław), z poprawkami sieci jak w PD": "Park paths from the Overpass API (Wrocław), with network corrections as in PD",
  "Zapisz GeoJSON": "Save GeoJSON",
+ "Park": "Park",
+ "Link z ustawieniami": "Link with settings",
+ "Przywróć domyślne": "Reset to defaults",
+ "Strefy odpoczynku": "Rest zones",
+ "Plik GeoJSON z punktami": "GeoJSON file with points",
  "Zapisz strefy (GeoJSON)": "Save zones (GeoJSON)",
  "Ławki (amenity=bench) i stoły piknikowe (leisure=picnic_table) z OpenStreetMap w obrysie wczytanej sieci": "Benches (amenity=bench) and picnic tables (leisure=picnic_table) from OpenStreetMap inside the loaded network",
  "Ładowanie Pythona (Pyodide)…": "Loading Python (Pyodide)…",
