@@ -107,28 +107,28 @@ global {
 	int forgets_last_cycle <- 0;  // zapomnienia w poprzednim cyklu (reflex świata biegnie przed graczami)
 
 	// udział gier C-D wśród wszystkich gier - do P3 (zysk oszustów przy zapominaniu)
-	float exploitation_rate() {
+	float exploitation_rate {
 		return nb_game = 0 ? 0.0 : nb_exploitations / nb_game;
 	}
 
 	// średnio gier na jednego różnego partnera (miara "iterowania" gry); wymaga dużego partner_window
 	// U4: met_count (nieprzycinany) zamiast last_met_cycle, które przycina distinct_partners_in_window
-	float mean_games_per_partner() {
+	float mean_games_per_partner {
 		list<player> g <- player where (!empty(each.met_count));
 		return empty(g) ? 0.0 : mean(g collect (each.nb_games / length(each.met_count)));
 	}
 
-	float mean_known_partners() {
+	float mean_known_partners {
 		return empty(player) ? 0.0 : mean(player collect length(each.known_others));
 	}
 
-	float mean_distinct_partners_window() {
+	float mean_distinct_partners_window {
 		return empty(player) ? 0.0 : mean(player collect each.distinct_partners_in_window());
 	}
 
 	// udział agentów, którzy w oknie spotkali więcej różnych partnerów niż dunbar_limit;
 	// bliski 0 => limit w tej konfiguracji praktycznie nie działa
-	float share_exceeding_dunbar() {
+	float share_exceeding_dunbar {
 		if empty(player) or dunbar_limit <= 0 { return 0.0; }
 		return length(player where (each.distinct_partners_in_window() > dunbar_limit)) / length(player);
 	}
@@ -170,7 +170,7 @@ global {
 		do evolution_step();
 	}
 
-	action evolution_step() {
+	action evolution_step {
 		map<player, string> decisions <- map<player, string>([]);
 		loop p over: player where (each.character in evolvable_characters) {
 			decisions[p] <- p.evolution_choice(p.pick_model());
@@ -252,7 +252,7 @@ global {
 	float r_hat_last_window <- -999.0;
 
 	// komunikat błędu konfiguracji modułu 3 ("" = poprawna)
-	string kin_config_error() {
+	string kin_config_error {
 		if !(payoff_mode in ["classic", "donation"]) { return "payoff_mode musi być classic albo donation."; }
 		if !(kin_matching_mode in ["family", "strategy"]) { return "kin_matching_mode musi być family albo strategy."; }
 		if payoff_mode = "donation" and !(b > c and c > 0) { return "Gra dawcy wymaga b > c > 0."; }
@@ -324,7 +324,7 @@ global {
 	}
 
 	// rodziny: losowy podział na grupy family_size; korelacja strategii; skupienie przestrzenne
-	action setup_families() {
+	action setup_families {
 		list<player> perm <- shuffle(list(player));
 		int fs <- max(1, family_size);
 		int k <- 0;
@@ -393,7 +393,7 @@ global {
 	int net_edges_removed <- 0;             // U5: faktycznie usunięte krawędzie (fragmented)
 
 	// buduje sieć z pliku i stosuje wariant; ten sam seed -> ta sama modyfikacja
-	action setup_network() {
+	action setup_network {
 		ask path_segment { do die; }
 		create path_segment from: park_paths_shapefile;
 		if network_cleanup {
@@ -417,7 +417,7 @@ global {
 	// usuwa krawędzie w losowej kolejności, tylko takie, które nie zwiększają liczby składowych
 	// i nie usuwają węzła (krawędzie w cyklach). U5: redukuje redundancję (mniej obejść), nie rozcina sieci;
 	// w sieci bliskiej drzewu edge_removal_fraction może nie zostać osiągnięte -> net_edges_removed
-	action fragment_network() {
+	action fragment_network {
 		int target <- round(length(path_segment) * edge_removal_fraction);
 		int n_vertices <- length(path_network.vertices);
 		list<path_segment> kept <- list(path_segment);
@@ -436,7 +436,7 @@ global {
 	}
 
 	// skróty: proste odcinki między niepołączonymi węzłami bliższymi niż shortcut_max_length
-	action add_shortcuts() {
+	action add_shortcuts {
 		list<point> vs <- list<point>(path_network.vertices);
 		list<list<point>> cand <- [];
 		if length(vs) > 1 {
@@ -454,7 +454,7 @@ global {
 		}
 	}
 
-	action compute_network_stats() {
+	action compute_network_stats {
 		net_nodes <- length(path_network.vertices);
 		net_edges <- length(path_network.edges);
 		net_mean_degree <- net_nodes = 0 ? 0.0 : 2 * net_edges / net_nodes;
@@ -487,8 +487,8 @@ global {
 		net_avg_path <- pairs = 0 ? 0.0 : total / pairs;
 		map bc <- betweenness_centrality(path_network);
 		float norm <- net_nodes > 2 ? (net_nodes - 1) * (net_nodes - 2) / 2.0 : 1.0;
-		net_betw_max <- empty(bc) ? 0.0 : float(max(bc.values)) / norm;
-		net_betw_mean <- empty(bc) ? 0.0 : float(mean(bc.values)) / norm;
+		net_betw_max <- empty(bc) ? 0.0 : max(list<float>(bc.values)) / norm;
+		net_betw_mean <- empty(bc) ? 0.0 : mean(list<float>(bc.values)) / norm;
 	}
 
 	// --- Metryka stabilności sieci spotkań (opisowa) ---
@@ -561,7 +561,7 @@ global {
 	int win_expl0 <- 0;
 	float exploit_last_window <- 0.0;
 
-	action apply_payoff_preset() {
+	action apply_payoff_preset {
 		if payoff_preset = "PD_classic" {
 			game_type <- "PD"; payoff_T <- 9.0; payoff_R <- 5.0; payoff_P <- 1.0; payoff_S <- 0.0;
 		} else if payoff_preset = "weak_PD" {
@@ -572,7 +572,7 @@ global {
 	}
 
 	// wyłącza wszystko spoza rdzenia i ustala skład populacji
-	action apply_compat_core() {
+	action apply_compat_core {
 		nb_QLEARN <- 0;
 		nb_AQLEARN <- 0;
 		movement_sensitivity <- 0.0;          // losowy ruch po sieci
@@ -605,7 +605,7 @@ global {
 	}
 
 	// nazwy mechanizmów spoza rdzenia, które są aktywne (pusta lista = czysty rdzeń)
-	list<string> core_violations() {
+	list<string> core_violations {
 		list<string> v <- [];
 		if nb_QLEARN > 0 or nb_AQLEARN > 0 or !empty(player where (each.character in ["QLEARN", "AQLEARN"])) { v <+ "Q-learning"; }
 		if movement_sensitivity != 0 or !empty(player where (each.sensitivity != 0)) { v <+ "ruch środowiskowy"; }
@@ -660,7 +660,7 @@ global {
 	}
 
 	// nachylenie udziału ALLD w 2. połowie przebiegu, w jednostkach "na 10 000 cykli"
-	float alld_trend_10k() {
+	float alld_trend_10k {
 		float den <- tr_n * tr_stt - tr_st * tr_st;
 		return (tr_n < 2 or den = 0) ? 0.0 : 10000 * (tr_n * tr_sty - tr_st * tr_sy) / den;
 	}
@@ -733,14 +733,14 @@ global {
 			to: "../results/character_timeseries.csv" rewrite: false format: "csv" header: true;
 	}
 
-	bool payoffs_valid() {
+	bool payoffs_valid {
 		if game_type = "PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P > payoff_S; }
 		if game_type = "weak_PD" { return payoff_T > payoff_R and payoff_R > payoff_P and payoff_P = payoff_S; }
 		if game_type = "snowdrift" { return payoff_T > payoff_R and payoff_R > payoff_S and payoff_S > payoff_P; }
 		return false;
 	}
 
-	bool payoffs_integer() {
+	bool payoffs_integer {
 		return payoff_T = round(payoff_T) and payoff_R = round(payoff_R)
 			and payoff_P = round(payoff_P) and payoff_S = round(payoff_S);
 	}
@@ -751,7 +751,7 @@ global {
 
 	int selected_index <- 0;
 
-	player selected_player() {
+	player selected_player {
 		list<player> all_players <- list(player);
 		if empty(all_players) {
 			return nil;
@@ -813,7 +813,7 @@ global {
 		return mean(group collect (each.score / each.nb_games * 1000));
 	}
 
-	float mean_score_all() {
+	float mean_score_all {
 		list<player> group <- player where (each.nb_games > 0);
 		if empty(group) {
 			return 0.0;
@@ -821,7 +821,7 @@ global {
 		return mean(group collect (each.score / each.nb_games * 1000));
 	}
 
-	float mean_for_classic() {
+	float mean_for_classic {
 		list<string> classic <- ["TFT", "ALLC", "ALLD", "FTFT", "TF2T", "GRIM", "WSLS"];
 		list<player> group <- player where (each.nb_games > 0 and (each.character in classic));
 		if empty(group) {
@@ -830,7 +830,7 @@ global {
 		return mean(group collect (each.score / each.nb_games * 1000));
 	}
 
-	float aqlearn_clique_fraction() {
+	float aqlearn_clique_fraction {
 		list<player> aq <- player where (each.character = "AQLEARN");
 		int total <- 0;
 		int high <- 0;
@@ -848,7 +848,7 @@ global {
 		return total = 0 ? 0.0 : (high / total);
 	}
 
-	float aqlearn_avg_distance() {
+	float aqlearn_avg_distance {
 		list<player> aq <- player where (each.character = "AQLEARN");
 		if length(aq) < 2 {
 			return 0.0;
@@ -897,7 +897,7 @@ global {
 
 	// czas cyklu w ms, uśredniony po perf_interval cyklach
 	reflex perf_measure when: perf_log and every(perf_interval) {
-		float now <- machine_time;
+		float now <- gama.machine_time;
 		if cycle > 0 {
 			float ms_per_cycle <- (now - perf_last_time) / perf_interval;
 			write "[perf] cykl " + cycle + " N=" + length(player) + ": " + ms_per_cycle + " ms/cykl";
@@ -1001,7 +1001,7 @@ grid environment_cell width: grid_cols height: grid_rows neighbors: 8 {
 		if ever { enc_rep_ever <- enc_rep_ever + 1; total_rep_ever <- total_rep_ever + 1; }
 	}
 
-	action close_window() {
+	action close_window {
 		last_share_rem <- enc_games = 0 ? -1.0 : enc_rep_rem / enc_games;
 		last_share_ever <- enc_games = 0 ? -1.0 : enc_rep_ever / enc_games;
 		enc_games <- 0;
@@ -1018,11 +1018,11 @@ grid environment_cell width: grid_cols height: grid_rows neighbors: 8 {
 	    do apply_decay();
 	}
 
-	action apply_decay() {
+	action apply_decay {
 		disorder <- disorder * disorder_decay;
 	}
 
-	rgb summary_color() {
+	rgb summary_color {
 		float fb <- world.average_feedback(self);
 		if fb > 0 {
 			return rgb(255 * (1 - fb), 255, 255 * (1 - fb));
@@ -1277,7 +1277,7 @@ species player skills: [moving] {
 	map<environment_cell, int> betrayal_count_at_location;
 
 	// parametry zależne od charakteru - wydzielone z global.init, żeby dało się je testować
-	action apply_character_params() {
+	action apply_character_params {
 		sensitivity <- movement_sensitivity;
 		move_speed <- player_speed;
 		if character = "AQLEARN" {
@@ -1292,11 +1292,11 @@ species player skills: [moving] {
 	}
 
 	// Moduł 2: model do imitacji - losowy sąsiad w zasięgu widzenia (well_mixed: losowy agent populacji)
-	list<player> relatives() {
+	list<player> relatives {
 		return family_id < 0 ? [] : (families[family_id] - self);
 	}
 
-	player pick_model() {
+	player pick_model {
 		if kin_on and kin_imitation_bias > 0 and flip(kin_imitation_bias) {
 			list<player> rel <- relatives();     // krewni niezależnie od odległości
 			if !empty(rel) { return one_of(rel); }
@@ -1306,20 +1306,20 @@ species player skills: [moving] {
 	}
 
 	// nowy charakter po kroku ewolucji (albo obecny); bez skutków ubocznych poza losowaniem
-	string evolution_choice(player model) {
+	string evolution_choice(player mdl) {
 		if flip(mutation_rate) { return one_of(evolvable_characters); }
-		if model = nil or model = self or not (model.character in evolvable_characters) { return character; }
+		if mdl = nil or mdl = self or not (mdl.character in evolvable_characters) { return character; }
 		// π nieokreślone, gdy ktoś nie grał w oknie - brak imitacji
-		if window_games = 0 or model.window_games = 0 { return character; }
+		if window_games = 0 or mdl.window_games = 0 { return character; }
 		float pi_self <- compute_pi();
-		float pi_model <- model.compute_pi();
-		return flip(world.fermi_probability(pi_model, pi_self)) ? model.character : character;
+		float pi_model <- mdl.compute_pi();
+		return flip(world.fermi_probability(pi_model, pi_self)) ? mdl.character : character;
 	}
 
 	// π do ewolucji - jedno miejsce. "own": średnia własna wypłata na grę.
 	// "inclusive" (DO DECYZJI): "add" = π_own + r * Σ skutków moich ruchów dla krewnych / gry;
 	// "strip" = π_own + r * (Σ skutków dla krewnych - Σ skutków ruchów krewnych dla mnie) / gry
-	float compute_pi() {
+	float compute_pi {
 		if window_games = 0 { return 0.0; }
 		float own <- window_payoff / window_games;
 		if kin_on and fitness_mode = "inclusive" {
@@ -1380,7 +1380,7 @@ species player skills: [moving] {
 		return max(0.0, min(1.0, base * erosion));
 	}
 
-	action init_on_network() {
+	action init_on_network {
 		current_node <- (network_cleanup ? placement_vertices : path_network.vertices) closest_to self;
 		location <- current_node;
 	}
@@ -1496,7 +1496,7 @@ species player skills: [moving] {
 	}
 
 	// używane w testach: zakłada wpisy dla wszystkich par z udziałem self
-	action setup_lists() {
+	action setup_lists {
 		loop other over: player where (each != self) {
 			do ensure_partner(other);
 			ask other { do ensure_partner(myself); }
@@ -1532,7 +1532,7 @@ species player skills: [moving] {
 		nb_forgets_total <- nb_forgets_total + 1;
 	}
 
-	int distinct_partners_in_window() {
+	int distinct_partners_in_window {
 		int since <- cycle - partner_window;
 		// przycinanie starych wpisów trzyma mapę małą
 		loop k over: copy(last_met_cycle.keys) {
@@ -1752,7 +1752,7 @@ species player skills: [moving] {
 		do try_play();
 	}
 
-	action try_play() {
+	action try_play {
 		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
 		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
 		// Moduł 3: w well_mixed z prawdopodobieństwem α partner spośród krewnych
@@ -1776,7 +1776,7 @@ species player skills: [moving] {
 					point pn1 <- self.location;
 					point pn2 <- enemy.location;
 
-					create game(p1:a,p2:b,location:(pn1 + pn2) / 2, pair_key:key) returns: new_games;
+					create game with: [p1::a, p2::b, location::(pn1 + pn2) / 2, pair_key::key] returns: new_games;
 
 					if pair_cooldown > 0 { world.active_pairs[key] <- first(new_games); }
 				}
@@ -1792,7 +1792,7 @@ species player skills: [moving] {
 		}
 	}
 
-	action draw_own_social_links() {
+	action draw_own_social_links {
 		list<player> candidates <- social_feedback.keys where (abs(social_feedback[each]) > social_link_threshold);
 		list<player> sorted_candidates <- candidates sort_by (-abs(social_feedback[each]));
 		list<player> top <- first(3, sorted_candidates);
@@ -2571,7 +2571,7 @@ experiment test_disorder_bump_asymmetry type: test {
 experiment test_broken_windows_affects_classic type: test {
     test "ALLC defektuje częściej przy wysokim disorder niż przy zerowym" {
         broken_windows_sensitivity <- 0.5;
-        create player(character:"ALLC") number: 1;
+        create player with: [character::"ALLC"] number: 1;
         player p <- first(player);
         environment_cell here <- environment_cell(p.location);
 
@@ -2614,7 +2614,7 @@ experiment test_anchor_decay type: test {
     test "effective_anchor_strength maleje wykładniczo z liczbą interakcji" {
         broken_windows_sensitivity <- 0.0; // wyłącz erozję środowiskową na czas testu
         anchor_decay_rate <- 0.15;
-        create player(character:"QLEARN", character_strength:0.8) number: 2;
+        create player with: [character::"QLEARN", character_strength::0.8] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2633,7 +2633,7 @@ experiment test_anchor_decay type: test {
 experiment test_anchor_erosion_by_disorder type: test {
     test "wysoki disorder obniża effective_anchor_strength do zera" {
         anchor_decay_rate <- 0.0;
-        create player(character:"QLEARN", character_strength:0.8) number: 2;
+        create player with: [character::"QLEARN", character_strength::0.8] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2651,7 +2651,7 @@ experiment test_pending_action_sync type: test {
     test "pending_action zgadza się z faktycznie zagranym ruchem mimo override kotwicy" {
         anchor_decay_rate <- 0.0;
         broken_windows_sensitivity <- 0.0;
-        create player(character: "QLEARN", base_character: "ALLD", character_strength: 1.0, epsilon: 0.0) number: 2;
+        create player with: [character::"QLEARN", base_character::"ALLD", character_strength::1.0, epsilon::0.0] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2664,7 +2664,7 @@ experiment test_pending_action_sync type: test {
 
 experiment test_pending_action_sync_broken_windows type: test {
     test "pending_action zgadza się z ruchem po override rozbitej szyby" {
-        create player(character: "QLEARN", character_strength: 0.0, epsilon: 0.0, initial_cooperation_bias: 1.0) number: 2;
+        create player with: [character::"QLEARN", character_strength::0.0, epsilon::0.0, initial_cooperation_bias::1.0] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2688,8 +2688,8 @@ experiment test_pending_action_sync_broken_windows type: test {
 experiment test_anchor_not_applied_to_classic type: test {
     test "character_strength pozostaje 0.0 dla agentów klasycznych mimo globalnego parametru" {
         character_strength_qlearn <- 0.9;
-        create player(character: "TFT") number: 1 returns: classic;
-        create player(character: "QLEARN") number: 1 returns: learners;
+        create player with: [character::"TFT"] number: 1 returns: classic;
+        create player with: [character::"QLEARN"] number: 1 returns: learners;
         // ta sama akcja, którą wywołuje global.init
         ask classic { do apply_character_params(); }
         ask learners { do apply_character_params(); }
@@ -2721,7 +2721,7 @@ experiment test_reputation_creates_self_fulfilling_bias type: test {
     test "RISKY zmienia zachowanie mimo dobrej historii z akurat tym przeciwnikiem" {
         generalization_threshold <- 3;
         broken_windows_sensitivity <- 0.0;
-        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, env_influence: 0.0) number: 2;
+        create player with: [character::"QLEARN", epsilon::0.0, character_strength::0.0, env_influence::0.0] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2756,7 +2756,7 @@ experiment test_reputation_creates_self_fulfilling_bias type: test {
 experiment test_new_state_uses_cooperation_bias type: test {
     test "stan odkryty w update_q dostaje prior initial_cooperation_bias, a nie 0/0" {
         broken_windows_sensitivity <- 0.0;
-        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, initial_cooperation_bias: 0.8) number: 2;
+        create player with: [character::"QLEARN", epsilon::0.0, character_strength::0.0, initial_cooperation_bias::0.8] number: 2;
         player p <- player[0];
         player opp <- player[1];
         ask p { do setup_lists(); }
@@ -2773,7 +2773,7 @@ experiment test_new_state_uses_cooperation_bias type: test {
 
     test "remis Q_D = Q_C rozstrzygany losowo, a nie zawsze na D" {
         broken_windows_sensitivity <- 0.0;
-        create player(character: "QLEARN", epsilon: 0.0, character_strength: 0.0, initial_cooperation_bias: 0.5) number: 2 returns: pair;
+        create player with: [character::"QLEARN", epsilon::0.0, character_strength::0.0, initial_cooperation_bias::0.5] number: 2 returns: pair;
         player p <- pair[0];
         player opp <- pair[1];
         ask p { do setup_lists(); }
@@ -2789,10 +2789,10 @@ experiment test_anchor_shifts_early_behavior type: test {
         anchor_decay_rate <- 0.15;
         broken_windows_sensitivity <- 0.0;
 
-        create player(character: "QLEARN", base_character: "ALLC", character_strength: 0.9,
-                       epsilon: 0.0, initial_cooperation_bias: 0.1) number: 1 returns: with_anchor;
-        create player(character: "QLEARN", base_character: "ALLC", character_strength: 0.0,
-                       epsilon: 0.0, initial_cooperation_bias: 0.1) number: 1 returns: without_anchor;
+        create player with: [character::"QLEARN", base_character::"ALLC", character_strength::0.9,
+                       epsilon::0.0, initial_cooperation_bias::0.1] number: 1 returns: with_anchor;
+        create player with: [character::"QLEARN", base_character::"ALLC", character_strength::0.0,
+                       epsilon::0.0, initial_cooperation_bias::0.1] number: 1 returns: without_anchor;
         create player number: 1 returns: opps;
 
         player pa <- first(with_anchor);
@@ -2838,10 +2838,10 @@ experiment test_payoff_validation type: test {
 experiment test_classic_start_switch type: test {
     test "classic_start_cooperate: TFT/TF2T/WSLS zaczynają od C; wyłączony - losowo" {
         broken_windows_sensitivity <- 0.0;
-        create player(character: "TFT") number: 1 returns: tft;
-        create player(character: "TF2T") number: 1 returns: tf2t;
-        create player(character: "WSLS") number: 1 returns: wsls;
-        create player(character: "ALLC") number: 1 returns: opps;
+        create player with: [character::"TFT"] number: 1 returns: tft;
+        create player with: [character::"TF2T"] number: 1 returns: tf2t;
+        create player with: [character::"WSLS"] number: 1 returns: wsls;
+        create player with: [character::"ALLC"] number: 1 returns: opps;
         player opp <- first(opps);
         ask player { do setup_lists(); }
 
@@ -2869,11 +2869,11 @@ experiment test_lazy_partner_init type: test {
     test "mapy per przeciwnik powstają przy pierwszej grze, bez setup_lists" {
         log_games <- false;
         unlimited_games <- true;
-        create player(character: "TFT") number: 2 returns: pair;
+        create player with: [character::"TFT"] number: 2 returns: pair;
         player a <- pair[0];
         player b <- pair[1];
         assert not (b in a.lists_per_other.keys);
-        create game(p1: a, p2: b, pair_key: "t") number: 1;
+        create game with: [p1::a, p2::b, pair_key::"t"] number: 1;
         assert length(a.lists_per_other[b]) = 1;
         assert length(b.lists_per_other[a]) = 1;
         assert a.known_others = [b];
@@ -2886,11 +2886,11 @@ experiment test_forget_clears_all_maps type: test {
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
         dunbar_limit <- 0;
-        create player(character: "QLEARN") number: 2 returns: pair;
+        create player with: [character::"QLEARN"] number: 2 returns: pair;
         player a <- pair[0];
         player b <- pair[1];
         ask a { do setup_lists(); }
-        create game(p1: a, p2: b, pair_key: "t") number: 1;
+        create game with: [p1::a, p2::b, pair_key::"t"] number: 1;
 
         assert b in a.lists_per_other.keys;
         assert b in a.my_moves_per_other.keys;
@@ -2901,7 +2901,7 @@ experiment test_forget_clears_all_maps type: test {
         assert b in a.social_feedback.keys;
         assert b in a.known_others;
 
-        ask a { do forget_partner(b); }
+        ask a { do forget_partner(pair[1]); }
 
         assert not (b in a.lists_per_other.keys);
         assert not (b in a.my_moves_per_other.keys);
@@ -2924,20 +2924,20 @@ experiment test_lru_keeps_most_recent type: test {
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
         dunbar_limit <- 2;
-        create player(character: "ALLC") number: 4 returns: ps;
+        create player with: [character::"ALLC"] number: 4 returns: ps;
         player a <- ps[0];
         player b <- ps[1];
         player c <- ps[2];
         player d <- ps[3];
 
-        create game(p1: a, p2: b, pair_key: "ab1") number: 1;
-        create game(p1: a, p2: c, pair_key: "ac1") number: 1;
+        create game with: [p1::a, p2::b, pair_key::"ab1"] number: 1;
+        create game with: [p1::a, p2::c, pair_key::"ac1"] number: 1;
         assert a.known_others = [b, c];
 
-        create game(p1: a, p2: b, pair_key: "ab2") number: 1;   // b odświeżony
+        create game with: [p1::a, p2::b, pair_key::"ab2"] number: 1;   // b odświeżony
         assert a.known_others = [c, b];
 
-        create game(p1: a, p2: d, pair_key: "ad1") number: 1;   // wypada c, nie b
+        create game with: [p1::a, p2::d, pair_key::"ad1"] number: 1;   // wypada c, nie b
         assert a.known_others = [b, d];
         assert not (c in a.lists_per_other.keys);
         assert b in a.lists_per_other.keys;
@@ -2945,7 +2945,7 @@ experiment test_lru_keeps_most_recent type: test {
 
         // partner bieżącej gry nigdy nie wypada, nawet przy limicie 1
         dunbar_limit <- 1;
-        create game(p1: a, p2: c, pair_key: "ac2") number: 1;
+        create game with: [p1::a, p2::c, pair_key::"ac2"] number: 1;
         assert a.known_others = [c];
     }
 }
@@ -2956,16 +2956,16 @@ experiment test_anchor_full_after_forget type: test {
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
         anchor_decay_rate <- 0.15;
-        create player(character: "QLEARN", character_strength: 0.8) number: 2 returns: pair;
+        create player with: [character::"QLEARN", character_strength::0.8] number: 2 returns: pair;
         player a <- pair[0];
         player b <- pair[1];
         loop i from: 1 to: 5 {
-            create game(p1: a, p2: b, pair_key: "ab" + i) number: 1;
+            create game with: [p1::a, p2::b, pair_key::"ab" + i] number: 1;
         }
         assert a.effective_anchor_strength(b) < 0.8;
 
-        ask a { do forget_partner(b); }
-        ask a { do ensure_partner(b); }   // ponowne spotkanie
+        ask a { do forget_partner(pair[1]); }
+        ask a { do ensure_partner(pair[1]); }   // ponowne spotkanie
         assert abs(a.effective_anchor_strength(b) - 0.8) < 0.001;
     }
 }
@@ -2976,15 +2976,15 @@ experiment test_pending_action_sync_with_dunbar type: test {
         unlimited_games <- true;
         dunbar_limit <- 1;
         broken_windows_sensitivity <- 1.0;
-        create player(character: "QLEARN", epsilon: 0.0, initial_cooperation_bias: 1.0) number: 1 returns: learners;
-        create player(character: "ALLC") number: 2 returns: opps;
+        create player with: [character::"QLEARN", epsilon::0.0, initial_cooperation_bias::1.0] number: 1 returns: learners;
+        create player with: [character::"ALLC"] number: 2 returns: opps;
         player a <- first(learners);
         ask environment_cell { disorder <- 0.5; }
 
         bool mismatch <- false;
         loop i from: 1 to: 50 {
             player opp <- opps[i mod 2];
-            create game(p1: a, p2: opp, pair_key: "g" + i) number: 1;
+            create game with: [p1::a, p2::opp, pair_key::"g" + i] number: 1;
             if a.pending_action[opp] != last(a.my_moves_per_other[opp]) { mismatch <- true; }
             if length(a.known_others) != 1 { mismatch <- true; }
         }
@@ -2998,18 +2998,18 @@ experiment test_disorder_clamp type: test {
         log_games <- false;
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
-        create player(character: "ALLD") number: 2 returns: pair;
+        create player with: [character::"ALLD"] number: 2 returns: pair;
         player a <- pair[0];
         player b <- pair[1];
         environment_cell cell_a <- environment_cell(a.location);
 
         disorder_clamp <- true;
-        loop i from: 1 to: 20 { create game(p1: a, p2: b, pair_key: "c" + i) number: 1; }
+        loop i from: 1 to: 20 { create game with: [p1::a, p2::b, pair_key::"c" + i] number: 1; }
         assert cell_a.disorder <= 1.0;
         assert cell_a.disorder = 1.0;   // 20 x 0.15 przekracza 1, więc dochodzi do sufitu
 
         disorder_clamp <- false;
-        loop i from: 1 to: 20 { create game(p1: a, p2: b, pair_key: "u" + i) number: 1; }
+        loop i from: 1 to: 20 { create game with: [p1::a, p2::b, pair_key::"u" + i] number: 1; }
         assert cell_a.disorder > 1.0;
     }
 }
@@ -3019,11 +3019,11 @@ experiment test_exploitation_counter type: test {
         log_games <- false;
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
-        create player(character: "ALLC") number: 1 returns: cs;
-        create player(character: "ALLD") number: 2 returns: ds;
-        create game(p1: first(cs), p2: ds[0], pair_key: "cd") number: 1;
+        create player with: [character::"ALLC"] number: 1 returns: cs;
+        create player with: [character::"ALLD"] number: 2 returns: ds;
+        create game with: [p1::first(cs), p2::ds[0], pair_key::"cd"] number: 1;
         assert nb_exploitations = 1;
-        create game(p1: ds[0], p2: ds[1], pair_key: "dd") number: 1;
+        create game with: [p1::ds[0], p2::ds[1], pair_key::"dd"] number: 1;
         assert nb_exploitations = 1;
         assert abs(world.exploitation_rate() - 0.5) < 0.001;
     }
@@ -3033,9 +3033,9 @@ experiment test_fermi_rule type: test {
     test "Fermi: π_model >> π_self prawie zawsze imitacja; równe π - ok. 50%" {
         fermi_k <- 0.5;
         mutation_rate <- 0.0;
-        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 1 returns: me;
-        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 1 returns: rich;
-        create player(character: "TFT", window_payoff: 0.0, window_games: 10) number: 1 returns: equal;
+        create player with: [character::"ALLC", window_payoff::0.0, window_games::10] number: 1 returns: me;
+        create player with: [character::"ALLD", window_payoff::90.0, window_games::10] number: 1 returns: rich;
+        create player with: [character::"TFT", window_payoff::0.0, window_games::10] number: 1 returns: equal;
         player p <- first(me);
 
         int adopt_rich <- 0;
@@ -3051,14 +3051,16 @@ experiment test_fermi_rule type: test {
 
     test "brak imitacji, gdy π nieokreślone albo model spoza evolvable_characters" {
         mutation_rate <- 0.0;
-        create player(character: "ALLC", window_payoff: 0.0, window_games: 0) number: 1 returns: idle;
-        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 1 returns: rich;
-        create player(character: "QLEARN", window_payoff: 90.0, window_games: 10) number: 1 returns: learner;
-        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 1 returns: me;
+        create player with: [character::"ALLC", window_payoff::0.0, window_games::0] number: 1 returns: idle;
+        create player with: [character::"ALLD", window_payoff::90.0, window_games::10] number: 1 returns: rich;
+        create player with: [character::"QLEARN", window_payoff::90.0, window_games::10] number: 1 returns: learner;
+        create player with: [character::"ALLC", window_payoff::0.0, window_games::10] number: 1 returns: me;
+        int bad <- 0;   // GAMA 2025 nie raportuje assert wewnątrz pętli - liczymy i sprawdzamy raz
         loop times: 200 {
-            assert first(idle).evolution_choice(first(rich)) = "ALLC";
-            assert first(me).evolution_choice(first(learner)) = "ALLC";
+            if first(idle).evolution_choice(first(rich)) != "ALLC" { bad <- bad + 1; }
+            if first(me).evolution_choice(first(learner)) != "ALLC" { bad <- bad + 1; }
         }
+        assert bad = 0;
     }
 }
 
@@ -3066,7 +3068,7 @@ experiment test_mutation_only_evolvable type: test {
     test "mutacja zwraca tylko charaktery z evolvable_characters" {
         mutation_rate <- 1.0;
         evolvable_characters <- ["ALLC", "ALLD"];
-        create player(character: "ALLC") number: 1 returns: me;
+        create player with: [character::"ALLC"] number: 1 returns: me;
         bool outside <- false;
         loop times: 500 {
             if !(first(me).evolution_choice(nil) in ["ALLC", "ALLD"]) { outside <- true; }
@@ -3080,11 +3082,11 @@ experiment test_grim_since_takeover type: test {
         log_games <- false;
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
-        create player(character: "TFT") number: 1 returns: me;
-        create player(character: "ALLD") number: 1 returns: opps;
+        create player with: [character::"TFT"] number: 1 returns: me;
+        create player with: [character::"ALLD"] number: 1 returns: opps;
         player p <- first(me);
         player opp <- first(opps);
-        create game(p1: p, p2: opp, pair_key: "g1") number: 1;   // opp zdradził
+        create game with: [p1::p, p2::opp, pair_key::"g1"] number: 1;   // opp zdradził
         assert p.lists_per_other[opp] contains "D";
 
         ask p { do change_character("GRIM"); }
@@ -3092,7 +3094,7 @@ experiment test_grim_since_takeover type: test {
         assert length(p.lists_per_other[opp]) = 1;   // historia zachowana
         assert p.GRIM(opp) = "C";                     // stara zdrada nie liczy się
 
-        create game(p1: p, p2: opp, pair_key: "g2") number: 1;   // nowa zdrada po przejęciu
+        create game with: [p1::p, p2::opp, pair_key::"g2"] number: 1;   // nowa zdrada po przejęciu
         assert p.GRIM(opp) = "D";
     }
 }
@@ -3103,9 +3105,9 @@ experiment test_evolution_step type: test {
         well_mixed <- true;
         fermi_k <- 0.01;
         mutation_rate <- 0.0;
-        create player(character: "ALLC", window_payoff: 0.0, window_games: 10) number: 5;
-        create player(character: "ALLD", window_payoff: 90.0, window_games: 10) number: 5;
-        create player(character: "QLEARN", window_payoff: 0.0, window_games: 10) number: 1 returns: learners;
+        create player with: [character::"ALLC", window_payoff::0.0, window_games::10] number: 5;
+        create player with: [character::"ALLD", window_payoff::90.0, window_games::10] number: 5;
+        create player with: [character::"QLEARN", window_payoff::0.0, window_games::10] number: 1 returns: learners;
 
         ask world { do evolution_step(); }
 
@@ -3121,8 +3123,8 @@ experiment test_well_mixed_pairing type: test {
         unlimited_games <- true;
         log_games <- false;
         vision_radius <- 1;
-        create player(character: "ALLC", location: {0, 0}) number: 1 returns: a;
-        create player(character: "ALLC", location: {world.shape.width, world.shape.height}) number: 1 returns: b;
+        create player with: [character::"ALLC", location::{0, 0}] number: 1 returns: a;
+        create player with: [character::"ALLC", location::{world.shape.width, world.shape.height}] number: 1 returns: b;
         ask first(a) { do try_play(); }
         assert first(a).nb_games = 1;
     }
@@ -3137,15 +3139,15 @@ experiment test_pending_action_sync_all_modules type: test {
         mutation_rate <- 0.3;
         well_mixed <- true;
         broken_windows_sensitivity <- 1.0;
-        create player(character: "QLEARN", epsilon: 0.0, initial_cooperation_bias: 1.0) number: 1 returns: learners;
-        create player(character: "ALLC") number: 3 returns: opps;
+        create player with: [character::"QLEARN", epsilon::0.0, initial_cooperation_bias::1.0] number: 1 returns: learners;
+        create player with: [character::"ALLC"] number: 3 returns: opps;
         player a <- first(learners);
         ask environment_cell { disorder <- 0.5; }
 
         bool mismatch <- false;
         loop i from: 1 to: 60 {
             player opp <- opps[i mod 3];
-            create game(p1: a, p2: opp, pair_key: "g" + i) number: 1;
+            create game with: [p1::a, p2::opp, pair_key::"g" + i] number: 1;
             if a.pending_action[opp] != last(a.my_moves_per_other[opp]) { mismatch <- true; }
             if i mod 10 = 0 { ask world { do evolution_step(); } }
         }
@@ -3180,11 +3182,13 @@ experiment test_compat_core_disables_noncore type: test {
 
 experiment test_payoff_presets type: test {
     test "presety macierzy wypłat przechodzą walidację swojego typu gry" {
+        int bad <- 0;   // GAMA 2025 nie raportuje assert wewnątrz pętli
         loop pr over: ["PD_classic", "weak_PD", "snowdrift"] {
             payoff_preset <- pr;
             ask world { do apply_payoff_preset(); }
-            assert world.payoffs_valid();
+            if !world.payoffs_valid() { bad <- bad + 1; }
         }
+        assert bad = 0;
     }
 }
 
@@ -3229,12 +3233,12 @@ experiment test_encounter_metric type: test {
         unlimited_games <- true;
         broken_windows_sensitivity <- 0.0;
         dunbar_limit <- 1;
-        create player(character: "ALLC") number: 3 returns: ps;
+        create player with: [character::"ALLC"] number: 3 returns: ps;
         player a <- ps[0];
-        create game(p1: a, p2: ps[1], pair_key: "g1") number: 1;   // nowy
-        create game(p1: a, p2: ps[1], pair_key: "g2") number: 1;   // pamiętany i znany
-        create game(p1: a, p2: ps[2], pair_key: "g3") number: 1;   // nowy -> ps[1] zapomniany
-        create game(p1: a, p2: ps[1], pair_key: "g4") number: 1;   // niepamiętany, ale znany
+        create game with: [p1::a, p2::ps[1], pair_key::"g1"] number: 1;   // nowy
+        create game with: [p1::a, p2::ps[1], pair_key::"g2"] number: 1;   // pamiętany i znany
+        create game with: [p1::a, p2::ps[2], pair_key::"g3"] number: 1;   // nowy -> ps[1] zapomniany
+        create game with: [p1::a, p2::ps[1], pair_key::"g4"] number: 1;   // niepamiętany, ale znany
         assert a.enc_games = 4;
         assert a.enc_rep_rem = 1;
         assert a.enc_rep_ever = 2;
@@ -3245,8 +3249,8 @@ experiment test_encounter_metric type: test {
 
 experiment test_hooks_preserve_behaviour type: test {
     test "compute_pi i init_beliefs_for działają jak poprzedni kod" {
-        create player(character: "ALLC", window_payoff: 12.0, window_games: 4) number: 1 returns: me;
-        create player(character: "ALLD") number: 1 returns: other;
+        create player with: [character::"ALLC", window_payoff::12.0, window_games::4] number: 1 returns: me;
+        create player with: [character::"ALLD"] number: 1 returns: other;
         assert first(me).compute_pi() = 3.0;
         assert first(other).compute_pi() = 0.0;
         ask first(me) { do init_beliefs_for(first(other)); }
@@ -3318,8 +3322,8 @@ experiment test_module3_families type: test {
         payoff_mode <- "donation";
         b <- 1.0; c <- 0.3;
         payoff_T <- 1.0; payoff_R <- 0.7; payoff_P <- 0.0; payoff_S <- -0.3;
-        create player(character: "ALLC") number: 100;
-        create player(character: "ALLD") number: 100;
+        create player with: [character::"ALLC"] number: 100;
+        create player with: [character::"ALLD"] number: 100;
         ask world { do setup_families(); }
         player p <- first(player);
         int fid <- p.family_id;
@@ -3354,14 +3358,19 @@ experiment test_module3_families type: test {
 
     test "inclusive przy family_r = 0 daje to samo co own" {
         family_r <- 0.0;
+        int bad <- 0;   // GAMA 2025 nie raportuje assert wewnątrz pętli
+        int checked <- 0;
         loop variant over: ["add", "strip"] {
             inclusive_variant <- variant;
             loop q over: player where (each.window_games > 0) {
                 fitness_mode <- "own";
                 float own <- q.compute_pi();
                 fitness_mode <- "inclusive";
-                assert abs(q.compute_pi() - own) < 0.000001;
+                if abs(q.compute_pi() - own) >= 0.000001 { bad <- bad + 1; }
+                checked <- checked + 1;
             }
         }
+        assert checked > 0;
+        assert bad = 0;
     }
 }
