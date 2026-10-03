@@ -134,7 +134,7 @@ progress { width: 100%; height: 10px; accent-color: var(--park); }
 .msg.warn { border-color: var(--accent); }
 .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ground); z-index: 10; }
 .loading .box { display: grid; gap: 10px; max-width: 420px; padding: 16px; }
-ul.plain { margin: 0; padding-left: 18px; }
+ul.plain, ol.plain { margin: 0; padding-left: 18px; }
 code { font-family: var(--font-mono); font-size: 12.5px; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -169,7 +169,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   <button role="tab" aria-selected="true" data-tab="sim" id="tab-sim">Symulacja</button>
   <button role="tab" aria-selected="false" data-tab="batch" id="tab-batch">Eksperymenty batch</button>
   <button role="tab" aria-selected="false" data-tab="tests" id="tab-tests">Testy</button>
-  <button role="tab" aria-selected="false" data-tab="about" id="tab-about">O porcie</button>
+  <button role="tab" aria-selected="false" data-tab="about" id="tab-about">O modelu</button>
 </nav>
 
 <!-- SYMULACJA -->
@@ -180,6 +180,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <button class="btn" id="btnRun" data-noi18n disabled>Start</button>
       <button class="btn" id="btnStep" disabled>Krok</button>
     </div>
+    <p class="hint">Skróty: <kbd>spacja</kbd> start/pauza, <kbd>→</kbd> krok</p>
     <div class="field"><label for="speed">Cykli na klatkę</label>
       <input type="number" id="speed" min="1" max="500" value="5"></div>
     <div class="field"><label for="seed">Seed (puste = losowy)</label>
@@ -228,6 +229,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   </aside>
 
   <main>
+    <div class="try-banner" id="tryBanner" hidden data-noi18n></div>
     <div id="messages"></div>
     <dl class="stats" id="stats"></dl>
     <div class="displays">
@@ -261,9 +263,10 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <div class="chart-box"><canvas id="chartShares"></canvas></div>
       </figure>
     </div>
+    <div class="panel" id="cmpPanel" data-noi18n></div>
     <div class="panel">
       <h2>Pliki wynikowe</h2>
-      <p class="hint">Odpowiedniki plików z <code>results/</code> dla bieżącego przebiegu. <code>ablation_results.csv</code> powstaje w cyklu <code>end_cycle</code>.</p>
+      <p class="hint">Odpowiedniki plików z <code>results/</code> dla bieżącego przebiegu. <code>ablation_results.csv</code> powstaje w cyklu <code>end_cycle</code>. <code>config.json</code> zapisuje ustawienia przebiegu, seed, sieć i wersję modelu.</p>
       <div class="controls" id="simDownloads"></div>
     </div>
   </main>
@@ -301,10 +304,42 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   </div>
 </section>
 
-<!-- O PORCIE -->
+<!-- O MODELU -->
 <section data-panel="about" hidden>
-  <div class="panel" style="max-width: 75ch">
-    <h2>Co odwzorowuje ten port</h2>
+  <div class="panel" style="max-width: 78ch">
+    <h2>O modelu</h2>
+    <h3>Czym jest model</h3>
+    <p>SIPD (Spatial Iterated Prisoner's Dilemma) to model agentowy spotkań w parku. Agenci chodzą po sieci ścieżek, a gdy znajdą się blisko siebie, spotykają się i rozgrywają rundę gry w dylemat więźnia. Model pozwala sprawdzić, jak wielkość parku, układ ścieżek i sposób poruszania się wpływają na to, kto kogo spotyka ponownie, oraz czy reguły kooperacji znane z teorii gier działają razem w przestrzeni.</p>
+    <h3>Jak działa</h3>
+    <ul class="plain">
+      <li>Agenci idą wzdłuż ścieżek ze stałą prędkością. Spacerowicz na każdym skrzyżowaniu wybiera losowo kolejną ścieżkę.</li>
+      <li>W każdym cyklu agent losuje partnera spośród osób w zasięgu widzenia, liczonym w linii prostej albo po ścieżkach. Para, która grała w ostatnich cyklach, nie gra od razu ponownie.</li>
+      <li>Każde spotkanie to runda gry: każdy z dwojga współpracuje (C) albo zdradza (D), a wypłaty wynikają z macierzy T, R, P, S. Strategie (charaktery) to m.in. TFT, ALLC, ALLD, GRIM i WSLS oraz uczące się QLEARN i AQLEARN.</li>
+      <li>Agent pamięta partnerów i historię gier z każdym z nich. Limit Dunbara ogranicza liczbę pamiętanych partnerów: po jego przekroczeniu agent zapomina partnera widzianego najdawniej.</li>
+      <li>Moduły dodatkowe są domyślnie wyłączone: ewolucja strategii przez naśladowanie lepszych, pokrewieństwo, rotacja odwiedzających, wejścia i cele ruchu, osoby przechodzące przez park, warianty sieci i strefy odpoczynku.</li>
+      <li>Rdzeń zgodności (<code>compat_core</code>) zostawia tylko strategie klasyczne i ruch losowy po sieci; wyłącza uczenie, disorder, kotwicę charakteru i ruch zależny od doświadczeń. W rdzeniu gra nie wpływa na to, dokąd idą agenci.</li>
+    </ul>
+    <h3>Jak używać</h3>
+    <ol class="plain">
+      <li>Wybierz sieć: gotowy park z biblioteki (OpenStreetMap, Wrocław), park pobrany z OSM albo własny plik GeoJSON. Bez pliku model używa sieci syntetycznej.</li>
+      <li>Ustaw najważniejsze parametry w panelu po lewej; pozostałe są pod przyciskiem „Pokaż wszystkie parametry”. Pole „Wczytaj ustawienia z” bierze ustawienia gotowego eksperymentu.</li>
+      <li>Kliknij Inicjalizuj, potem Start (spacja) albo Krok (→).</li>
+      <li>Obserwuj mapę komórek i linie relacji. Kliknij agenta, żeby zobaczyć jego pamięć na drugiej mapie. Wykresy pokazują wyniki, pamięć partnerów i udziały charakterów.</li>
+      <li>Żeby porównać dwa warianty, kliknij „Zapamiętaj ten przebieg” w panelu porównania, zmień ustawienia, kliknij Inicjalizuj i uruchom ponownie.</li>
+      <li>Pobierz pliki CSV razem z <code>config.json</code>. Wiele przebiegów naraz policzysz w zakładce Eksperymenty batch.</li>
+    </ol>
+    <h3>Na co zwrócić uwagę</h3>
+    <ul class="plain">
+      <li>Liczba gier na partnera mówi, jak często te same osoby spotykają się ponownie. Zależy od wielkości parku i liczby ludzi, więc parki porównuj przy tej samej liczbie osób na kilometr ścieżki.</li>
+      <li>W zamkniętej populacji udział spotkań z pamiętanym partnerem szybko dochodzi do prawie 100%, więc lepiej porównywać liczbę gier na partnera.</li>
+      <li>Wzór przestrzenny zależy od sposobu ruchu. Dla spacerowiczów liczy się położenie w sieci: centralne ścieżki mieszają obcych, a krawędzie i ślepe zaułki częściej łączą tych samych ludzi. Ruch do celów ten wzór osłabia.</li>
+      <li>Długość wizyty może odwrócić ten wzór: gdy wizyty są krótsze niż przejście przez park, przy wejściach na obrzeżu ciągle spotykają się nowe osoby.</li>
+      <li>Jeden przebieg to jedna losowa historia. Wnioski wyciągaj z kilku powtórzeń z różnymi seedami (zakładka Eksperymenty batch).</li>
+    </ul>
+    <h3>Co wypróbować</h3>
+    <p class="hint">Każdy przycisk wczytuje park z biblioteki, ustawia rdzeń zgodności (strategie klasyczne, ruch losowy po sieci, zasięg 30 m, prędkość 2 m na cykl), inicjalizuje model z seedem 1 i uruchamia go do 3000 cykli. Po pierwszym wariancie uruchom drugi: oba pojawią się na wykresie porównania w zakładce Symulacja.</p>
+    <div class="try-list" id="tryList" data-noi18n></div>
+    <h3>Co odwzorowuje ten port</h3>
     <p>Plik <code>sipd.py</code> zawiera cały model z <code>models/PD.gaml</code>: sieć ścieżek, siatkę komórek z polem disorder, 9 charakterów, Q-learning per przeciwnik ze stanami RISKY/SAFE, pamięć społeczną i środowiskową, efekt rozbitej szyby, kotwicę charakteru, ograniczenie gier (height), limit Dunbara, typ gry, klasyczny start od C, metryki, eksporty CSV, eksperymenty batch i testy.</p>
     <h3>Różnice względem GAMA</h3>
     <ul class="plain">
@@ -315,14 +350,20 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     </ul>
     <h3>Uruchamianie poza przeglądarką</h3>
     <p><code>python sipd.py --test</code>, <code>python sipd.py --experiment A_baseline --repeat 2 --end-cycle 2000 --geojson drogi.geojson</code>. Stronę lokalnie: <code>python -m http.server</code> w katalogu <code>web/</code>, potem <code>http://localhost:8000</code>.</p>
+    <h3>Jak cytować</h3>
+    <p>Do czasu publikacji artykułów cytuj oprogramowanie z repozytorium. Artykuły z wynikami modelu są w przygotowaniu; odnośniki do nich dodamy po publikacji.</p>
+    <pre class="cite" id="citeText" data-noi18n></pre>
+    <div class="controls"><button class="btn small" id="btnCite">Kopiuj</button><button class="btn small" id="btnBib">Kopiuj BibTeX</button></div>
+    <p class="hint" id="modelVer" data-noi18n></p>
   </div>
 </section>
 
 <script>
 "use strict";
+// paleta Okabe–Ito (rozróżnialna przy daltonizmie) + szary i wino dla 9 charakterów
 const COLORS = {
-  TFT: "#2f6fb2", QLEARN: "#8a4fbf", AQLEARN: "#c0508a", ALLC: "#2f9d63", ALLD: "#1c2520",
-  FTFT: "#3aa3b5", TF2T: "#6d7fd6", GRIM: "#b3372b", WSLS: "#c98a1a",
+  TFT: "#0072b2", QLEARN: "#882255", AQLEARN: "#f0e442", ALLC: "#009e73", ALLD: "#d55e00",
+  FTFT: "#56b4e9", TF2T: "#cc79a7", GRIM: "#7f7f7f", WSLS: "#e69f00",
 };
 const RESTART_KEYS = new Set(["real_env", "world_size", "grid_cols", "grid_rows", "nb_QLEARN", "nb_AQLEARN",
   "nb_TFT", "nb_ALLC", "nb_ALLD", "nb_FTFT", "nb_TF2T", "nb_GRIM", "nb_WSLS", "game_type", "payoff_T",
@@ -372,6 +413,8 @@ async function boot() {
     });
   }
   py.FS.writeFile("sipd.py", src);
+  MODEL_HASH = await UX.hashText(src);
+  renderVersion();
   py.runPython(`
 import sys, json
 sys.path.insert(0, ".")
@@ -436,6 +479,8 @@ def _meta():
   buildBatch();
   buildLegend(meta.characters);
   loadDemoPreset();
+  UX.basicAdvanced($("paramForm"), BASIC_KEYS);
+  UX.sliders(SLIDERS);
   sortSelects();
   initSettings();
   $("loading").hidden = true;
@@ -544,6 +589,7 @@ function applyPreset(name) {
   Object.entries(e.among || {}).forEach(([k, vals]) => setInput($("p_" + k), vals[0]));
   setInput($("p_log_games"), true);
   if (e.until === "end_cycle") setInput($("p_end_cycle"), DEFAULTS.end_cycle);
+  UX.refresh();
   if (SET) SET.save();
   showMsg(L("Wczytano ustawienia ", "Loaded the settings of ") + name + L(". Kliknij Inicjalizuj.", ". Click Initialise."), "warn");
 }
@@ -561,12 +607,14 @@ function onParamChange(key) {
     return;
   }
   py.globals.get("_set")(key, JSON.stringify(readInput(key)));
+  liveChanged = true;
   if (snap) redraw();
 }
 
 // ---------- model ----------
 function initModel() {
   stop();
+  stopAt = null;
   const seedTxt = $("seed").value.trim();
   const seed = seedTxt === "" ? null : parseInt(seedTxt, 10);
   try {
@@ -574,7 +622,7 @@ function initModel() {
     net = res.network;
     hasModel = true;
     UX.ready();
-    netKind = net.source === "geojson" ? "geojson" : (readInput("real_env") ? "synthetic" : "artificial");
+    netKind = String(net.source).split("/")[0] === "geojson" ? "geojson" : (readInput("real_env") ? "synthetic" : "artificial");
     renderNet();
     if (res.warnings.length) showMsg(res.warnings.join(" "), "warn"); else $("messages").replaceChildren();
   } catch (e) {
@@ -586,6 +634,11 @@ function initModel() {
   }
   ["btnRun", "btnStep"].forEach((id) => { $(id).disabled = false; });
   simDownloads().forEach((b) => { b.disabled = false; });
+  runNo += 1;
+  lastConfig = simConfig();
+  liveChanged = false;
+  CMP.start(tryLabel || [`Przebieg ${runNo}`, `Run ${runNo}`], Object.assign({ network: netLabel(), seed: seedTxt || "–" }, readParams()));
+  tryLabel = null;
   if (readInput("rest_on")) $("btnSaveZones").disabled = false;
   resetCharts();
   snap = JSON.parse(py.runPython("M.snapshot()"));
@@ -608,10 +661,12 @@ function stepOnce(n) {
 let lastChartCycle = -1;
 function loop() {
   if (!running) return;
-  const n = Math.max(1, parseInt($("speed").value, 10) || 1);
+  let n = Math.max(1, parseInt($("speed").value, 10) || 1);
+  if (stopAt) n = Math.min(n, Math.max(1, stopAt - snap.cycle));
   if (stepOnce(n)) {
     redraw();
-    if (snap.cycle - lastChartCycle >= 10) updateCharts();
+    if (snap.cycle - lastChartCycle >= 10 || (stopAt && snap.cycle >= stopAt)) updateCharts();
+    if (stopAt && snap.cycle >= stopAt) { stop(); showMsg(L("Koniec eksperymentu (cykl ", "End of the experiment (cycle ") + snap.cycle + ").", ""); return; }
     requestAnimationFrame(loop);
   }
 }
@@ -707,6 +762,7 @@ function renderStats() {
     [L("znanych partnerów", "known partners"), snap.known.toFixed(2)],
     [L("różnych w oknie", "distinct in window"), snap.distinct.toFixed(2)],
     [L("zapomnień/cykl", "forgettings/cycle"), snap.forgets],
+    [L("gier na partnera", "games per partner"), gamesPerPartner().toFixed(2)],
   ];
   $("stats").replaceChildren(...stats.map(([k, v]) => {
     const d = document.createElement("div"); d.className = "stat";
@@ -777,6 +833,9 @@ function updateCharts(first = false) {
   d[1].data.push({ x: snap.cycle, y: snap.distinct });
   d[2].data.push({ x: snap.cycle, y: snap.forgets });
   chartShares.data.datasets.forEach((ds) => ds.data.push({ x: snap.cycle, y: snap.shares[ds.label] || 0 }));
+  const tot = snap.moves_C + snap.moves_D;
+  CMP.record(snap.cycle, { gpp: gamesPerPartner(), enc_rem: 100 * snap.enc_rem, known: snap.known, distinct: snap.distinct,
+    share_d: tot ? 100 * snap.moves_D / tot : 0 });
   chartScore.update("none"); chartDunbar.update("none"); chartShares.update("none");
 }
 
@@ -794,6 +853,10 @@ function buildSimDownloads() {
     b.addEventListener("click", () => { if (hasModel) download(n, py.globals.get("_csv")(n)); });
     box.append(b);
   });
+  const c = document.createElement("button"); c.className = "btn"; c.textContent = "config.json"; c.disabled = true;
+  c.addEventListener("click", () => { if (lastConfig) UX.downloadJSON("config.json", Object.assign({}, lastConfig,
+    { cycle_at_download: snap ? snap.cycle : 0, params_changed_during_run: liveChanged })); });
+  box.append(c);
 }
 
 // ---------- batch ----------
@@ -818,6 +881,9 @@ async function runBatch() {
   py.globals.set("_brep", repeat);
   py.globals.set("_bend", end);
   py.globals.set("_bseed", seedTxt === "" ? null : parseInt(seedTxt, 10));
+  batchConfig = { model: "SIPD", model_file: "sipd.py", model_version: MODEL_HASH, app: location.origin + location.pathname,
+    saved: new Date().toISOString(), batch: { experiment: name, spec: EXPS[name], repeat, end_cycle: end, seed: seedTxt || null },
+    network: netLabel() };
   try {
     py.runPython("B = sipd.BatchRun(_bname, repeat=_brep, end_cycle=_bend, geojson=GEO, seed=_bseed)");
   } catch (e) { $("bProgTxt").textContent = pyError(e); return; }
@@ -882,7 +948,9 @@ function showBatchResults() {
   $("bTable").replaceChildren(table(data.head, data.rows));
   const b = document.createElement("button"); b.className = "btn"; b.textContent = L("Pobierz ", "Download ") + fname;
   b.addEventListener("click", () => download(fname, py.globals.get("_batch_csv")(fname)));
-  $("bDownloads").replaceChildren(b);
+  const c = document.createElement("button"); c.className = "btn"; c.textContent = "config.json";
+  c.addEventListener("click", () => UX.downloadJSON("config.json", batchConfig));
+  $("bDownloads").replaceChildren(b, c);
 }
 
 // ---------- testy ----------
@@ -957,8 +1025,9 @@ $("parkSel").addEventListener("change", () => {
   $("btnParkLib").disabled = custom;
 });
 let PARKS = null;
-$("btnParkLib").addEventListener("click", async () => {
-  if (!py) return;
+$("btnParkLib").addEventListener("click", () => loadParkLib());
+async function loadParkLib() {
+  if (!py) return false;
   const name = parkName();
   $("btnParkLib").disabled = true;
   try {
@@ -972,9 +1041,10 @@ $("btnParkLib").addEventListener("click", async () => {
     const r = await fetch("parki/" + it.file, { cache: "no-cache" });
     if (!r.ok) throw new Error(it.file + ": HTTP " + r.status);
     await useGeo(await r.text(), name, true);
-  } catch (e) { geoState = null; $("geoInfo").textContent = L("Nie udało się: ", "Failed: ") + (e.message || pyError(e)) + "."; }
+    return true;
+  } catch (e) { geoState = null; $("geoInfo").textContent = L("Nie udało się: ", "Failed: ") + (e.message || pyError(e)) + "."; return false; }
   finally { $("btnParkLib").disabled = $("parkSel").value === "__custom"; }
-});
+}
 $("btnParkOsm").addEventListener("click", async () => {
   if (!py) return;
   const name = parkName();
@@ -1124,7 +1194,7 @@ $("btnSaveZones").addEventListener("click", () => {
   if (!text || !JSON.parse(text).features.length) { zoneInfo("Brak stref do zapisania (włącz rest_on i zainicjalizuj model albo pobierz z OSM).", "No zones to save (switch on rest_on and initialise the model, or fetch from OSM)."); return; }
   download("rest_zones.geojson", text, "application/geo+json");
 });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redraw(); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { redraw(); CMP.redraw(); });
 // ---------- język ----------
 let netKind = null, geoState = "default";
 const DUNBAR_LABELS = [() => L("średnio znanych partnerów", "mean known partners"),
@@ -1162,7 +1232,7 @@ function renderGeoInfo() {
 I18N.onChange(() => {
   document.querySelectorAll("#paramForm summary").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_CAT_EN[el.dataset.pl] || el.dataset.pl); });
   document.querySelectorAll("#paramForm label[data-key]").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_PARAM_EN[el.dataset.key] || el.dataset.pl); });
-  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo(); renderSetInfo();
+  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo(); renderSetInfo(); renderVersion();
   sortSelects();
   for (const ch of [chartScore, chartDunbar, chartShares]) {
     if (!ch) continue;
@@ -1199,11 +1269,13 @@ function initSettings() {
     : SET.restored === "badlink" ? ["Link z ustawieniami jest uszkodzony, więc go pominięto.", "The settings link is damaged, so it was ignored."]
     : null;
   renderSetInfo();
+  UX.refresh();
 }
 function renderSetInfo() { $("setInfo").textContent = setMsg ? L(setMsg[0], setMsg[1]) : ""; }
 $("btnReset").onclick = () => {
   if (!SET) return;
   SET.reset();
+  UX.refresh();
   $("preset").value = "";
   renderScenarioTitles();
   setMsg = ["Przywrócono ustawienia startowe. Kliknij Inicjalizuj, żeby ich użyć.", "Default settings restored. Click Initialise to use them."];
@@ -1215,6 +1287,122 @@ $("btnLink").onclick = async () => {
   setMsg = ok ? ["Skopiowano link z bieżącymi ustawieniami (z seedem).", "Copied a link with the current settings (including the seed)."] : null;
   renderSetInfo();
 };
+
+// ---------- najważniejsze parametry, suwaki, porównanie, skróty ----------
+const BASIC_KEYS = ["compat_core", "compat_N", "game_type", "vision_radius", "player_speed", "dunbar_limit", "evolution_on",
+  "network_variant"];
+const SLIDERS = { compat_N: [10, 500, 10], vision_radius: [5, 60, 1], player_speed: [0.5, 10, 0.5], dunbar_limit: [0, 150, 1] };
+const CMP = UX.compare($("cmpPanel"), [
+  { key: "gpp", pl: "gier na partnera", en: "games per partner" },
+  { key: "enc_rem", pl: "spotkań z pamiętanym (%)", en: "encounters with a remembered partner (%)" },
+  { key: "known", pl: "znanych partnerów (średnio)", en: "known partners (mean)" },
+  { key: "distinct", pl: "różnych partnerów w oknie", en: "distinct partners in window" },
+  { key: "share_d", pl: "udział D (%)", en: "share of D (%)" },
+]);
+let runNo = 0, tryLabel = null, lastConfig = null, batchConfig = null, liveChanged = false, MODEL_HASH = "", stopAt = null;
+UX.shortcuts({
+  Space: () => { if (!$("btnRun").disabled) $("btnRun").click(); },
+  ArrowRight: () => { if (!$("btnStep").disabled) $("btnStep").click(); },
+}, () => !document.querySelector('section[data-panel="sim"]').hidden);
+
+// średnia liczba gier na partnera (metoda modelu, tylko odczyt)
+function gamesPerPartner() { try { return hasModel ? py.runPython("M.mean_games_per_partner()") : 0; } catch (e) { return 0; } }
+function netLabel() {
+  if (netKind !== "geojson") return netKind || "–";
+  try { return py.globals.get("_GEO_NAME"); } catch (e) { return "GeoJSON"; }
+}
+// ustawienia przebiegu do config.json (te same, z którymi zainicjalizowano model)
+function simConfig() {
+  return { model: "SIPD", model_file: "sipd.py", model_version: MODEL_HASH, app: location.origin + location.pathname,
+    saved: new Date().toISOString(), seed: $("seed").value.trim() || null, network: netLabel(), params: readParams() };
+}
+
+// ---------- Co wypróbować ----------
+// rdzeń zgodności: strategie klasyczne, ruch losowy po sieci; 3000 cykli, seed 1
+const TRY_BASE = { compat_core: true, network_cleanup: true, vision_radius: 30, player_speed: 2.0, log_games: false };
+const TRY = [
+  { title: ["Mały i duży park przy tej samej gęstości", "A small and a large park at the same density"],
+    what: ["Park Staszica (ok. 2 km ścieżek) i Park Południowy (ok. 8 km), w obu ok. 20 osób na kilometr ścieżki: 44 i 170 agentów.",
+           "Staszic Park (about 2 km of paths) and South Park (about 8 km), both with about 20 people per kilometre of path: 44 and 170 agents."],
+    look: ["„gier na partnera” w statystykach i na wykresie porównania.", "“games per partner” in the statistics and on the comparison chart."],
+    expect: ["W małym parku te same osoby spotykają się wyraźnie częściej: gier na partnera jest więcej (w tym przebiegu mniej więcej dwa razy), choć gęstość ludzi jest ta sama.",
+             "In the small park the same people meet clearly more often: there are more games per partner (about twice as many in this run), although the density of people is the same."],
+    variants: [
+      { label: ["Park Staszica, 44 agentów", "Staszic Park, 44 agents"], park: "Park Staszica", params: { compat_N: 44 } },
+      { label: ["Park Południowy, 170 agentów", "South Park, 170 agents"], park: "Park Południowy", params: { compat_N: 170 } }] },
+  { title: ["Mniej ścieżek: wariant fragmented", "Fewer paths: the fragmented variant"],
+    what: ["Park Południowy, 80 agentów. W drugim wariancie model usuwa ok. 20% krawędzi sieci tak, żeby sieć została spójna.",
+           "South Park, 80 agents. In the second variant the model removes about 20% of the network's edges while keeping the network connected."],
+    look: ["„gier na partnera” i „znanych partnerów”.", "“games per partner” and “known partners”."],
+    expect: ["Przy uboższej sieci spacerowicze częściej trafiają na tych samych ludzi: gier na partnera przybywa, a znanych partnerów jest trochę mniej.",
+             "With a sparser network, strollers run into the same people more often: games per partner rise and there are slightly fewer known partners."],
+    variants: [
+      { label: ["sieć pełna", "full network"], park: "Park Południowy", params: { compat_N: 80 } },
+      { label: ["fragmented", "fragmented"], park: "Park Południowy", params: { compat_N: 80, network_variant: "fragmented" } }] },
+  { title: ["Spacer bez celu i wyjścia do celów", "Strolling and trips to destinations"],
+    what: ["Park Południowy, 80 agentów. W drugim wariancie agenci wchodzą wejściami na obrzeżu i idą najkrótszą drogą do kolejnych celów (8 punktów rozłożonych po parku), gdzie zostają na chwilę.",
+           "South Park, 80 agents. In the second variant agents enter at gates on the edge and take the shortest route to successive destinations (8 points spread over the park), where they stay for a while."],
+    look: ["„znanych partnerów” oraz warstwę mapy „komórki: spotkania powtórne”.", "“known partners” and the “cells: repeat encounters” map layer."],
+    expect: ["Z celami agenci przecinają park najkrótszymi drogami i poznają wyraźnie więcej różnych osób. Na mapie zobacz, czy powtórne spotkania przesuwają się z krawędzi w okolice celów.",
+             "With destinations, agents cross the park on shortest routes and get to know clearly more different people. On the map, see whether repeat encounters move from the edges towards the destinations."],
+    variants: [
+      { label: ["spacer bez celu", "strolling"], park: "Park Południowy", params: { compat_N: 80 } },
+      { label: ["wyjścia do celów", "trips to destinations"], park: "Park Południowy",
+        params: { compat_N: 80, movement_mode: "destinations", dest_count: 8, dest_placement: "dispersed", dest_dwell: 300 } }] },
+  { title: ["Krótkie i długie wizyty", "Short and long visits"],
+    what: ["Park Południowy, pula 200 odwiedzających, w parku średnio jedna czwarta. Wizyta trwa średnio 250 albo 3000 cykli; kto wychodzi, wraca później z pamięcią partnerów.",
+           "South Park, a pool of 200 visitors, a quarter of them in the park on average. A visit lasts 250 or 3000 cycles on average; whoever leaves comes back later with their memory of partners."],
+    look: ["„gier na partnera” i „znanych partnerów”.", "“games per partner” and “known partners”."],
+    expect: ["Przy krótkich wizytach w parku ciągle pojawiają się nowe osoby: gier na partnera jest mniej, a znanych partnerów więcej niż przy długich wizytach.",
+             "With short visits new people keep arriving: there are fewer games per partner and more known partners than with long visits."],
+    variants: [
+      { label: ["wizyty po 250 cykli", "250-cycle visits"], park: "Park Południowy", params: { compat_N: 200, bank_on: true, bank_present_share: 0.25, bank_mean_stay: 250 } },
+      { label: ["wizyty po 3000 cykli", "3000-cycle visits"], park: "Park Południowy", params: { compat_N: 200, bank_on: true, bank_present_share: 0.25, bank_mean_stay: 3000 } }] },
+];
+async function runTry(it, i) {
+  document.querySelector('nav.tabs button[data-tab="sim"]').click();
+  stop();
+  if (i === 0) CMP.clear(); else CMP.keep();
+  const v = it.variants[i];
+  Object.keys(DEFAULTS).forEach((k) => setInput($("p_" + k), DEFAULTS[k]));
+  Object.entries(Object.assign({}, TRY_BASE, v.params)).forEach(([k, val]) => setInput($("p_" + k), val));
+  $("preset").value = ""; renderScenarioTitles();
+  $("seed").value = "1";
+  $("speed").value = 50;
+  UX.refresh();
+  if (SET) SET.save();
+  setMsg = null; renderSetInfo();
+  UX.tryBanner($("tryBanner"), it, i, runTry);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (v.park) {
+    $("parkSel").value = v.park; $("parkCustomRow").hidden = true;
+    if (!(await loadParkLib())) return;
+  }
+  tryLabel = v.label;
+  initModel();
+  if (hasModel) { stopAt = 3000; start(); }
+}
+UX.tryCards($("tryList"), TRY, runTry);
+
+// ---------- jak cytować i wersja modelu ----------
+const CITE = "Dziedzic, S. (2026). SIPD: Spatial Iterated Prisoner's Dilemma (GAMA model, Python port and browser app) " +
+  "[Software]. https://github.com/SzymonDziedzic98/SIPD";
+function bibtex() {
+  return "@software{sipd,\n  author = {Dziedzic, Szymon},\n" +
+    "  title = {{SIPD}: Spatial Iterated Prisoner's Dilemma ({GAMA} model, Python port and browser app)},\n" +
+    "  year = {2026},\n  url = {https://github.com/SzymonDziedzic98/SIPD},\n" +
+    "  note = {Model file sipd.py" + (MODEL_HASH ? ", " + MODEL_HASH : "") + "}\n}";
+}
+function renderVersion() {
+  $("citeText").textContent = CITE;
+  $("modelVer").textContent = MODEL_HASH
+    ? L(`Wersja modelu: sipd.py, ${MODEL_HASH} (skrót pliku wczytanego przez tę stronę; ten sam skrót trafia do config.json).`,
+        `Model version: sipd.py, ${MODEL_HASH} (hash of the file loaded by this page; the same hash goes into config.json).`)
+    : "";
+}
+$("btnCite").onclick = () => UX.copy(CITE);
+$("btnBib").onclick = () => UX.copy(bibtex());
+renderVersion();
 
 boot();
 </script>
