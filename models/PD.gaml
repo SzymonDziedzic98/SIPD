@@ -485,10 +485,55 @@ global {
 			}
 		}
 		net_avg_path <- pairs = 0 ? 0.0 : total / pairs;
-		map bc <- betweenness_centrality(path_network);
+		// betweenness: Brandes po krokach (jak port Pythona, PathNetwork.stats). Wbudowany
+		// betweenness_centrality liczył ścieżki ważone długością i przy 2500 węzłach trwał ok. 15 min.
+		list<float> bc <- brandes_betweenness(vs);
 		float norm <- net_nodes > 2 ? (net_nodes - 1) * (net_nodes - 2) / 2.0 : 1.0;
-		net_betw_max <- empty(bc) ? 0.0 : max(list<float>(bc.values)) / norm;
-		net_betw_mean <- empty(bc) ? 0.0 : mean(list<float>(bc.values)) / norm;
+		net_betw_max <- empty(bc) ? 0.0 : max(bc) / 2.0 / norm;     // nieskierowany: każda para 2x
+		net_betw_mean <- empty(bc) ? 0.0 : mean(bc) / 2.0 / norm;
+	}
+
+	list<float> brandes_betweenness(list<point> vs) {
+		int n <- length(vs);
+		map<point, int> idx <- [];
+		loop i from: 0 to: n - 1 { idx[vs[i]] <- i; }
+		list<list<int>> adj <- [];
+		loop i from: 0 to: n - 1 {
+			adj <+ remove_duplicates(list<point>(path_network neighbors_of vs[i]) collect idx[each]);
+		}
+		list<float> bc <- list_with(n, 0.0);
+		loop s0 from: 0 to: n - 1 {
+			list<int> dist <- list_with(n, -1);
+			list<float> sigma <- list_with(n, 0.0);
+			list<float> delta <- list_with(n, 0.0);
+			list<list<int>> pred <- list_with(n, []);
+			list<int> order <- [s0];
+			dist[s0] <- 0;
+			sigma[s0] <- 1.0;
+			int qi <- 0;
+			loop while: qi < length(order) {
+				int v <- order[qi];
+				qi <- qi + 1;
+				loop w over: adj[v] {
+					if dist[w] < 0 {
+						dist[w] <- dist[v] + 1;
+						order <+ w;
+					}
+					if dist[w] = dist[v] + 1 {
+						sigma[w] <- sigma[w] + sigma[v];
+						pred[w] <- pred[w] + v;
+					}
+				}
+			}
+			loop k from: length(order) - 1 to: 0 step: -1 {
+				int w <- order[k];
+				loop v over: pred[w] {
+					delta[v] <- delta[v] + sigma[v] / sigma[w] * (1 + delta[w]);
+				}
+				if w != s0 { bc[w] <- bc[w] + delta[w]; }
+			}
+		}
+		return bc;
 	}
 
 	// --- Metryka stabilności sieci spotkań (opisowa) ---
