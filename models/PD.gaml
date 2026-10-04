@@ -1156,6 +1156,15 @@ global {
 		}
 		save [variant_name, seed, cs_byp[0], cs_byp[1], cs_byp[2], cs_byp[3]]
 			to: "../results/through_bypass.csv" rewrite: false format: "csv" header: false;
+		// komórki celów (moduł 6), jak cell_at(vertices[d]) w porcie: do podziału komórek z celem i bez
+		if dest_active {
+			loop d over: dests {
+				environment_cell dc <- environment_cell(nodes[d]);
+				if dc != nil {
+					save [variant_name, seed, dc.grid_x, dc.grid_y] to: "../results/dest_cells.csv" rewrite: false format: "csv" header: false;
+				}
+			}
+		}
 	}
 
 	reflex export_encounter_cells when: encounter_export and cycle = end_cycle {
