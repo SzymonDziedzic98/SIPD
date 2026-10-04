@@ -1,7 +1,8 @@
 // Wspólne drobiazgi interfejsu (ten sam plik w psm-web i SIPD, web/ux.js):
 // przyciski wyboru pliku w języku strony, podpowiedzi na wyszarzonych przyciskach, napisy w pustych panelach, opisy parametrów,
 // zrozumiały komunikat, gdy Pyodide się nie wczyta, zapamiętywanie ustawień i link z ustawieniami, parametry podstawowe
-// i zaawansowane, suwaki, porównanie dwóch przebiegów, skróty klawiszowe, karty „Co wypróbować”, wersja modelu i config.json.
+// i zaawansowane, suwaki, porównanie dwóch przebiegów, skróty klawiszowe, karty „Co wypróbować”, wersja modelu i config.json,
+// skala kolorów, zapis PNG, wykres pudełkowy, powtórzenia, samouczek, widok na telefon i galeria parków.
 // Wymaga i18n.js (L, I18N). Nie dotyka modelu: czyta i ustawia tylko pola formularza.
 "use strict";
 const UX = (() => {
@@ -44,6 +45,30 @@ const UX = (() => {
 .cite { font-family: var(--font-mono); font-size: 12px; background: var(--ground); border: 1px solid var(--line); border-radius: 6px;
   padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--panel); }
+.scale-bar { display: grid; grid-template-columns: auto minmax(60px, 220px) auto; gap: 6px; align-items: center; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.scale-bar .bar { height: 10px; border-radius: 3px; border: 1px solid var(--line); }
+.scale-bar .ttl { grid-column: 1 / -1; }
+.png-btn { padding: 1px 8px; font-size: 11.5px; }
+.box-plot { display: grid; gap: 6px; }
+.box-plot canvas { width: 100%; height: 260px; display: block; }
+.rep-wrap { display: grid; gap: 6px; }
+.tour-mask { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+.tour-hole { position: fixed; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); outline: 2px solid var(--focus); transition: all .2s; z-index: 21; pointer-events: none; }
+.tour-tip { position: fixed; z-index: 22; max-width: min(340px, calc(100vw - 32px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); }
+.tour-tip p { margin: 0; }
+.mobile-tabs { display: none; gap: 4px; }
+.mobile-tabs button { flex: 1; border: 1px solid var(--line); background: transparent; padding: 6px 10px; border-radius: 6px; font-family: var(--font-label); font-weight: 500; cursor: pointer; }
+.mobile-tabs button[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+@media (max-width: 860px) {
+  .mobile-tabs { display: flex; }
+  [data-mview="results"] > aside.params, [data-mview="params"] > main { display: none !important; }
+}
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.gallery button { border: 1px solid var(--line); background: var(--ground); border-radius: 6px; padding: 4px; cursor: pointer; display: grid; gap: 2px; text-align: left; font-size: 11px; color: var(--muted); }
+.gallery button[aria-pressed="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
+.gallery img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: var(--map-bg, transparent); border-radius: 4px; }
+.gallery b { color: var(--ink); font-weight: 600; font-size: 11.5px; }
 .load-error .detail { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 `;
   document.head.append(style);
@@ -432,7 +457,7 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 
   // ---------- „Co wypróbować” ----------
   // Karty z eksperymentami: co sprawdzić, na co patrzeć, czego się spodziewać; przyciski wariantów uruchamia strona.
-  function tryCards(host, items, run) {
+  function tryCards(host, items, run, reps) {
     const render = () => {
       host.replaceChildren(...items.map((it) => {
         const c = document.createElement("article"); c.className = "try-card";
@@ -447,6 +472,14 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
           b.addEventListener("click", () => run(it, i));
           ctr.append(b);
         });
+        if (reps) {
+          const r = document.createElement("button"); r.type = "button"; r.className = "btn";
+          r.textContent = L("Oba warianty × 5 seedów", "Both variants × 5 seeds");
+          r.title = L("Liczy każdy wariant z seedami 1–5 bez animacji i pokazuje średnią, odchylenie i liczbę wygranych par.",
+            "Runs each variant with seeds 1–5 without animation and shows the mean, SD and number of winning pairs.");
+          r.addEventListener("click", () => reps(it));
+          ctr.append(r);
+        }
         c.append(h, p1, p2, p3, ctr);
         return c;
       }));
@@ -509,6 +542,203 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+
+  // ---------- J: legenda skali kolorów ----------
+  // el: pojemnik pod mapą; spec: { title: [pl, en], stops: [kolory CSS], min, max } albo null (ukryj)
+  function scaleBar(el, spec) {
+    if (!el) return;
+    el.__spec = spec;
+    if (!el.__ux) { el.__ux = true; relabels.push(() => scaleBar(el, el.__spec)); }
+    if (!spec) { el.hidden = true; return; }
+    el.hidden = false; el.className = "scale-bar";
+    const f = (v) => (typeof v === "number" ? (Math.abs(v) >= 100 ? v.toFixed(0) : +v.toFixed(2)).toString() : String(v));
+    const fmt = (v) => (I18N.lang === "pl" ? f(v).replace(".", ",") : f(v));
+    el.innerHTML = '<span class="ttl"></span><span class="lo"></span><span class="bar"></span><span class="hi"></span>';
+    el.querySelector(".ttl").textContent = L(spec.title[0], spec.title[1]);
+    el.querySelector(".lo").textContent = fmt(spec.min);
+    el.querySelector(".hi").textContent = fmt(spec.max) + (spec.plus ? "+" : "");
+    el.querySelector(".bar").style.background = `linear-gradient(to right, ${spec.stops.join(", ")})`;
+  }
+
+  // ---------- I: zapis PNG ----------
+  // canvas z tłem panelu (wykresy Chart.js mają przezroczyste tło)
+  function savePNG(canvas, name) {
+    const c = document.createElement("canvas"); c.width = canvas.width; c.height = canvas.height;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim() || "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(canvas, 0, 0);
+    c.toBlob((b) => {
+      const url = URL.createObjectURL(b);
+      const a = document.createElement("a"); a.href = url; a.download = name;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
+  }
+  const slug = (t) => (t || "obraz").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ł/g, "l")
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "obraz";
+  // przycisk „PNG” przy nagłówku każdego panelu z obrazem (figcaption albo h2)
+  function pngButtons(hosts) {
+    hosts.forEach((host) => {
+      if (!host || host.querySelector(".png-btn")) return;
+      const cap = host.querySelector("figcaption") || host.querySelector("h2");
+      if (!cap) return;
+      const b = document.createElement("button"); b.type = "button"; b.className = "btn png-btn"; b.textContent = "PNG";
+      const name = () => slug((host.querySelector("h3, h2") || {}).textContent) + ".png";
+      const upd = () => { b.title = L("Zapisz obraz jako PNG", "Save the image as PNG"); b.setAttribute("aria-label", b.title + ": " + name()); };
+      upd(); relabels.push(upd);
+      b.addEventListener("click", () => { const cv = host.querySelector("canvas"); if (cv) savePNG(cv, name()); });
+      if (cap.tagName === "H2") { const w = document.createElement("div"); w.className = "controls"; w.style.justifyContent = "space-between"; cap.before(w); w.append(cap, b); }
+      else cap.append(b);
+    });
+  }
+
+  // ---------- O: wykres pudełkowy ----------
+  // groups: [{ label, values: [liczby] }]; rysowany na canvas (mediana, kwartyle, wąsy do min/max, punkty)
+  function quant(a, q) { const s = [...a].sort((x, y) => x - y); const i = (s.length - 1) * q, lo = Math.floor(i); return s[lo] + (s[Math.min(lo + 1, s.length - 1)] - s[lo]) * (i - lo); }
+  function boxPlot(canvas, groups, ylabel) {
+    const cs = getComputedStyle(document.documentElement), c = (n) => cs.getPropertyValue(n).trim();
+    const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth || 600, H = canvas.clientHeight || 260;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = c("--panel"); ctx.fillRect(0, 0, W, H);
+    const g = groups.filter((x) => x.values.length);
+    if (!g.length) return;
+    const all = g.flatMap((x) => x.values);
+    let lo = Math.min(...all), hi = Math.max(...all);
+    if (hi - lo < 1e-12) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+    const L0 = 64, R0 = 12, T0 = 10, B0 = 46;
+    const Y = (v) => T0 + (H - T0 - B0) * (1 - (v - lo) / (hi - lo));
+    ctx.font = "11px " + (c("--font-mono") || "monospace"); ctx.fillStyle = c("--muted"); ctx.strokeStyle = c("--line"); ctx.lineWidth = 1;
+    for (let k = 0; k <= 4; k++) {
+      const v = lo + (hi - lo) * k / 4, y = Y(v);
+      ctx.beginPath(); ctx.moveTo(L0, y); ctx.lineTo(W - R0, y); ctx.stroke();
+      ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(Math.abs(v) >= 100 ? v.toFixed(0) : v.toPrecision(3), L0 - 6, y);
+    }
+    ctx.save(); ctx.translate(12, T0 + (H - T0 - B0) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText(ylabel || "", 0, 0); ctx.restore();
+    const bw = (W - L0 - R0) / g.length, accent = c("--focus");
+    g.forEach((grp, i) => {
+      const x = L0 + bw * (i + 0.5), w = Math.min(46, bw * 0.5), v = grp.values;
+      const q1 = quant(v, 0.25), q2 = quant(v, 0.5), q3 = quant(v, 0.75), mn = Math.min(...v), mx = Math.max(...v);
+      ctx.strokeStyle = c("--ink"); ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(x, Y(mn)); ctx.lineTo(x, Y(q1)); ctx.moveTo(x, Y(q3)); ctx.lineTo(x, Y(mx));
+      ctx.moveTo(x - w / 4, Y(mn)); ctx.lineTo(x + w / 4, Y(mn)); ctx.moveTo(x - w / 4, Y(mx)); ctx.lineTo(x + w / 4, Y(mx)); ctx.stroke();
+      ctx.fillStyle = accent; ctx.globalAlpha = 0.22; ctx.fillRect(x - w / 2, Y(q3), w, Y(q1) - Y(q3)); ctx.globalAlpha = 1;
+      ctx.strokeStyle = accent; ctx.strokeRect(x - w / 2, Y(q3), w, Y(q1) - Y(q3));
+      ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(x - w / 2, Y(q2)); ctx.lineTo(x + w / 2, Y(q2)); ctx.stroke();
+      ctx.fillStyle = c("--ink");
+      v.forEach((val, j) => { ctx.beginPath(); ctx.arc(x + w / 2 + 6 + (j % 3) * 3, Y(val), 1.8, 0, 2 * Math.PI); ctx.fill(); });
+      ctx.fillStyle = c("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+      const lab = grp.label.length > 26 ? grp.label.slice(0, 25) + "…" : grp.label;
+      ctx.fillText(lab, x, H - B0 + 8); ctx.fillText("n=" + v.length, x, H - B0 + 22);
+    });
+  }
+
+  // ---------- K: powtórzenia (średnia ± odchylenie) ----------
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const sd = (a) => (a.length > 1 ? Math.sqrt(a.reduce((s, x) => s + (x - mean(a)) ** 2, 0) / (a.length - 1)) : 0);
+  // res: [[{metryki} na seed] na wariant]; metrics: [{key, pl, en}]; labels: [[pl, en]] wariantów
+  function repTable(el, labels, metrics, res, seeds) {
+    const t = document.createElement("table"); t.className = "cmp-table";
+    const head = [L("miara", "measure"), ...labels.map((l) => L(l[0], l[1]) + " (" + L("średnia ± SD", "mean ± SD") + ")")];
+    if (labels.length === 2) head.push(L("wariant 2 > wariant 1", "variant 2 > variant 1"));
+    const tr0 = t.insertRow(); head.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    const n = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+    metrics.forEach((m) => {
+      const tr = t.insertRow();
+      const cells = [L(m.pl, m.en)];
+      const cols = res.map((r) => r.map((x) => x[m.key]));
+      cols.forEach((a) => cells.push(a.length ? n(mean(a)) + " ± " + n(sd(a)) : "–"));
+      if (cols.length === 2) {
+        const k = Math.min(cols[0].length, cols[1].length);
+        let w = 0; for (let i = 0; i < k; i++) if (cols[1][i] > cols[0][i]) w++;
+        cells.push(k ? `${w}/${k}` : "–");
+      }
+      cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
+    });
+    const p = document.createElement("p"); p.className = "hint";
+    p.textContent = L(`Powtórzenia z seedami ${seeds.join(", ")}; w kolumnie „wariant 2 > wariant 1” liczba par z tym samym seedem, w których drugi wariant dał większą wartość.`,
+      `Replicates with seeds ${seeds.join(", ")}; the “variant 2 > variant 1” column counts the same-seed pairs in which the second variant gave a larger value.`);
+    el.replaceChildren(t, p);
+  }
+
+  // ---------- H: samouczek ----------
+  // steps: [{ el: () => element, text: [pl, en] }]; pokazywany raz (klucz w localStorage), potem z przycisku
+  function tour(key, steps, force) {
+    try { if (!force && localStorage.getItem(key)) return; } catch (e) { if (!force) return; }
+    const hole = document.createElement("div"); hole.className = "tour-hole";
+    const tip = document.createElement("div"); tip.className = "tour-tip"; tip.setAttribute("role", "dialog");
+    document.body.append(hole, tip);
+    let i = 0;
+    const end = () => { hole.remove(); tip.remove(); document.removeEventListener("keydown", onKey, true); window.removeEventListener("resize", show);
+      try { localStorage.setItem(key, "1"); } catch (e) { /* bez zapamiętywania */ } };
+    const onKey = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); end(); } };
+    document.addEventListener("keydown", onKey, true);
+    function show() {
+      const st = steps[i], el = st.el();
+      if (!el || !el.getClientRects().length) { if (i + 1 < steps.length) { i++; show(); } else end(); return; }
+      el.scrollIntoView({ block: el.getBoundingClientRect().height > window.innerHeight * 0.6 ? "start" : "nearest" });
+      const r = el.getBoundingClientRect();
+      Object.assign(hole.style, { left: r.left - 4 + "px", top: r.top - 4 + "px", width: r.width + 8 + "px", height: r.height + 8 + "px" });
+      tip.replaceChildren();
+      const p = document.createElement("p"); p.textContent = L(st.text[0], st.text[1]);
+      const ctr = document.createElement("div"); ctr.className = "controls";
+      const skip = document.createElement("button"); skip.type = "button"; skip.className = "btn small"; skip.textContent = L("Zamknij", "Close");
+      const next = document.createElement("button"); next.type = "button"; next.className = "btn primary small";
+      next.textContent = i + 1 < steps.length ? L("Dalej", "Next") + ` (${i + 1}/${steps.length})` : L("Gotowe", "Done");
+      skip.onclick = end; next.onclick = () => { if (i + 1 < steps.length) { i++; show(); } else end(); };
+      ctr.append(next, skip); tip.append(p, ctr);
+      const tw = Math.min(340, window.innerWidth - 32);
+      let left = Math.min(Math.max(16, r.left), window.innerWidth - tw - 16);
+      let top = r.bottom + 12;
+      if (top + 140 > window.innerHeight) top = Math.max(16, r.top - 150);
+      Object.assign(tip.style, { left: left + "px", top: top + "px" });
+      next.focus({ preventScroll: true });
+    }
+    window.addEventListener("resize", show);
+    show();
+  }
+
+  // ---------- L: telefon – przełącznik Parametry / Wyniki ----------
+  function mobileTabs(section) {
+    const nav = document.createElement("div"); nav.className = "mobile-tabs"; nav.setAttribute("role", "group");
+    const bp = document.createElement("button"); bp.type = "button";
+    const br = document.createElement("button"); br.type = "button";
+    nav.append(bp, br);
+    section.before(nav);
+    const set = (v) => { section.dataset.mview = v; bp.setAttribute("aria-pressed", String(v === "params")); br.setAttribute("aria-pressed", String(v === "results")); };
+    bp.onclick = () => set("params"); br.onclick = () => { set("results"); window.dispatchEvent(new Event("resize")); };
+    const lab = () => { bp.textContent = L("Parametry", "Parameters"); br.textContent = L("Wyniki", "Results"); nav.setAttribute("aria-label", L("Widok na telefonie", "Phone view")); };
+    relabels.push(lab); lab(); set("params");
+    // nawigacja zakładek ukrywa przełącznik razem z sekcją
+    new MutationObserver(() => { nav.hidden = section.hidden; }).observe(section, { attributes: true, attributeFilter: ["hidden"] });
+    return { show: set };
+  }
+
+  // ---------- N: galeria parków ----------
+  // items: [{ name, file, length_m, junctions }]; miniatury SVG z katalogu dir
+  function gallery(host, items, dir, onPick) {
+    const render = () => {
+      host.className = "gallery";
+      host.replaceChildren(...items.map((it) => {
+        const b = document.createElement("button"); b.type = "button"; b.dataset.name = it.name;
+        const img = document.createElement("img"); img.alt = ""; img.loading = "lazy"; img.src = dir + it.file.replace(/\.geojson$/, ".svg");
+        const n = document.createElement("b"); n.textContent = it.name.replace(/^Park /, "");
+        const d = document.createElement("span");
+        const km = (it.length_m / 1000).toFixed(1);
+        d.textContent = L(`${km.replace(".", ",")} km · ${it.junctions} skrzyż.`, `${km} km · ${it.junctions} junct.`);
+        b.title = it.name + " – " + d.textContent;
+        b.append(img, n, d);
+        b.addEventListener("click", () => onPick(it.name));
+        return b;
+      }));
+    };
+    relabels.push(render); render();
+    return { mark(name) { host.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.name === name))); } };
+  }
+
   return { fileInputs, disabledHint, emptyNote, ready, loadFailed, settings, copy, paramHelp, fmtValue,
-    basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON };
+    basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON,
+    scaleBar, savePNG, pngButtons, boxPlot, repTable, mean, sd, tour, mobileTabs, gallery };
 })();

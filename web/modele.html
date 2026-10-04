@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modele doktoratu</title>
+<!-- Wspólna strona wejściowa (ten sam plik w psm-web i SIPD, web/modele.html). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root { color-scheme: light; --ground: #f2f4ee; --panel: #fbfcf8; --ink: #1c2520; --muted: #5d6a61; --line: #d5dbd0; --park: #3f6b4a; --focus: #1f6fb2;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, Arial, sans-serif; --font-label: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --ground: #121714; --panel: #19201b; --ink: #e2e8e0; --muted: #98a59b; --line: #2d3830; --park: #7fb08a; --focus: #6fb1ea; } }
+:root[data-theme="dark"] { color-scheme: dark; --ground: #121714; --panel: #19201b; --ink: #e2e8e0; --muted: #98a59b; --line: #2d3830; --park: #7fb08a; --focus: #6fb1ea; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.55 var(--font-body); padding: 24px 16px 40px; }
+main { max-width: 860px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+h1, h2 { font-family: var(--font-label); font-weight: 600; margin: 0; text-wrap: balance; }
+h1 { font-size: 24px; } h2 { font-size: 18px; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.lang { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.lang button { border: 0; background: transparent; padding: 3px 9px; cursor: pointer; font: 600 12px var(--font-label); color: var(--muted); }
+.lang button[aria-pressed="true"] { background: var(--ink); color: var(--ground); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 10px; align-content: start; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; }
+a { color: var(--focus); }
+a.btn { text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; color: var(--ink); background: var(--ground); }
+a.btn.primary { background: var(--park); border-color: var(--park); color: var(--ground); font-weight: 600; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 data-pl="Modele doktoratu" data-en="PhD models">Modele doktoratu</h1>
+    <div class="lang" role="group" aria-label="Język / Language"><button type="button" data-lang="pl">PL</button><button type="button" data-lang="en">EN</button></div>
+    <p class="muted" style="flex-basis: 100%" data-pl="Dwa modele agentowe parku miejskiego, uruchamiane w przeglądarce. Oba działają na tych samych sieciach ścieżek parków Wrocławia z OpenStreetMap." data-en="Two agent-based models of an urban park that run in the browser. Both work on the same OpenStreetMap path networks of Wrocław parks.">Dwa modele agentowe parku miejskiego, uruchamiane w przeglądarce. Oba działają na tych samych sieciach ścieżek parków Wrocławia z OpenStreetMap.</p>
+  </header>
+  <div class="cards">
+    <section class="card">
+      <h2 data-pl="PSM – stres proksemiczny" data-en="PSM – proxemic stress">PSM – stres proksemiczny</h2>
+      <p data-pl="Jak nasadzenia i układ ścieżek wpływają na stres osoby idącej przez park, gdy inni wyłaniają się zza krzewów." data-en="How planting and path layout affect the stress of a person walking through a park when others emerge from behind shrubs.">Jak nasadzenia i układ ścieżek wpływają na stres osoby idącej przez park, gdy inni wyłaniają się zza krzewów.</p>
+      <div class="links">
+        <a class="btn primary" href="https://szymondziedzic98.github.io/psm-web/" data-pl="Otwórz model" data-en="Open the model">Otwórz model</a>
+        <a class="btn" href="https://github.com/SzymonDziedzic98/psm-web" data-pl="Repozytorium" data-en="Repository">Repozytorium</a>
+      </div>
+    </section>
+    <section class="card">
+      <h2 data-pl="SIPD – spotkania i kooperacja" data-en="SIPD – encounters and cooperation">SIPD – spotkania i kooperacja</h2>
+      <p data-pl="Kto kogo spotyka ponownie w parku i czy reguły kooperacji z dylematu więźnia działają razem w przestrzeni." data-en="Who meets whom again in a park, and whether the laws of cooperation from the prisoner's dilemma hold together in space.">Kto kogo spotyka ponownie w parku i czy reguły kooperacji z dylematu więźnia działają razem w przestrzeni.</p>
+      <div class="links">
+        <a class="btn primary" href="https://szymondziedzic98.github.io/SIPD/" data-pl="Otwórz model" data-en="Open the model">Otwórz model</a>
+        <a class="btn" href="https://github.com/SzymonDziedzic98/SIPD" data-pl="Repozytorium" data-en="Repository">Repozytorium</a>
+      </div>
+    </section>
+  </div>
+  <p class="muted" data-pl="Szymon Dziedzic, Wydział Architektury Politechniki Wrocławskiej." data-en="Szymon Dziedzic, Faculty of Architecture, Wrocław University of Science and Technology.">Szymon Dziedzic, Wydział Architektury Politechniki Wrocławskiej.</p>
+</main>
+<script>
+"use strict";
+// język jak na stronach modeli: ?lang=, potem zapis w przeglądarce, potem język przeglądarki
+function pick() {
+  try {
+    const q = new URLSearchParams(location.search).get("lang");
+    if (q === "pl" || q === "en") return q;
+    const s = localStorage.getItem("lang");
+    if (s === "pl" || s === "en") return s;
+  } catch (e) { /* brak localStorage */ }
+  return (navigator.language || "").toLowerCase().startsWith("pl") ? "pl" : "en";
+}
+function apply(l) {
+  document.documentElement.lang = l;
+  document.querySelectorAll("[data-pl]").forEach((el) => { el.textContent = el.dataset[l]; });
+  document.title = l === "en" ? "PhD models" : "Modele doktoratu";
+  document.querySelectorAll("[data-lang]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === l)));
+}
+document.querySelectorAll("[data-lang]").forEach((b) => b.addEventListener("click", () => {
+  try { localStorage.setItem("lang", b.dataset.lang); } catch (e) { /* tryb prywatny */ }
+  apply(b.dataset.lang);
+}));
+apply(pick());
+</script>
+</body>
+</html>

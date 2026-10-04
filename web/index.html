@@ -59,6 +59,7 @@ header.top {
   padding-block: 16px 12px; border-bottom: 1px solid var(--line);
 }
 header.top p { margin: 0; color: var(--muted); max-width: 70ch; }
+.top a.btn { text-decoration: none; color: inherit; }
 .status { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
 .status b { color: var(--ink); font-weight: 500; }
 .lang { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
@@ -160,6 +161,8 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   <h1>SIPD – przestrzenny dylemat więźnia</h1>
   <p>Port modelu <code>PD.gaml</code> do Pythona, uruchamiany w przeglądarce. Parametry z oznaczeniem ↻ działają po ponownej inicjalizacji.</p>
   <div class="status" id="status"><span>cykl</span> <b id="stCycle">–</b> · <span>gier</span> <b id="stGames">–</b> · <span>sieć</span> <b id="stNet">–</b></div>
+  <button type="button" class="btn small" id="btnTour">Samouczek</button>
+  <a class="btn small" href="modele.html" id="lnkModels">Modele doktoratu</a>
   <div class="lang" role="group" aria-label="Język / Language">
     <button type="button" data-lang="pl" lang="pl">PL</button><button type="button" data-lang="en" lang="en">EN</button>
   </div>
@@ -204,6 +207,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <option>Park Zachodni</option>
         <option value="__custom">inna nazwa…</option>
       </select></div>
+    <div id="parkGallery"></div>
     <div class="field wide" id="parkCustomRow" hidden><label for="parkCustom">Nazwa w OSM</label>
       <input type="text" id="parkCustom" placeholder="np. Park Tołpy"></div>
     <div class="controls">
@@ -242,6 +246,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
           </select>
         </figcaption>
         <canvas class="map" id="mapMain" width="720" height="720"></canvas>
+        <div id="mapScale" hidden data-noi18n></div>
       </figure>
       <figure class="display">
         <figcaption><h3 id="memTitle" data-noi18n>agent_memory</h3><span class="hint">kliknij agenta na mapie, żeby go wybrać</span></figcaption>
@@ -262,6 +267,12 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
         <figcaption><h3>Udziały charakterów (ewolucja)</h3></figcaption>
         <div class="chart-box"><canvas id="chartShares"></canvas></div>
       </figure>
+    </div>
+    <div class="panel" id="repPanel" hidden data-noi18n>
+      <h2 id="repTitle"></h2>
+      <p class="hint mono" id="repProg"></p>
+      <div class="controls"><button class="btn" id="repStop">Zatrzymaj</button></div>
+      <div class="table-wrap" id="repTable"></div>
     </div>
     <div class="panel" id="cmpPanel" data-noi18n></div>
     <div class="panel">
@@ -290,6 +301,11 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <progress id="bProg" value="0" max="1"></progress>
     <p class="hint mono" id="bProgTxt" data-noi18n>—</p>
     <div class="table-wrap" id="bSummary"></div>
+    <div class="box-plot" id="bBox" hidden>
+      <h2>Rozkład wyniku w wariantach</h2>
+      <div class="controls"><select id="bBoxMetric" aria-label="Wynik na wykresie" data-nosort></select></div>
+      <canvas id="bBoxCanvas"></canvas>
+    </div>
     <div class="table-wrap" id="bTable"></div>
     <div class="controls" id="bDownloads"></div>
   </div>
@@ -485,6 +501,7 @@ def _meta():
   initSettings();
   $("loading").hidden = true;
   initModel();
+  startTour(false);
 }
 
 // ---------- formularz parametrów ----------
@@ -744,6 +761,10 @@ function drawMap(canvas, mode) {
 function redraw() {
   if (!snap) return;
   drawMap($("mapMain"), $("layer").value);
+  const lay = $("layer").value, nc = "rgb(" + css("--cell-neutral") + ")";
+  UX.scaleBar($("mapScale"), lay === "disorder" ? { title: ["Kolor komórki: disorder", "Cell colour: disorder"], stops: [nc, css("--accent")], min: 0, max: 1, plus: true }
+    : lay === "encounters" ? { title: ["Kolor komórki: udział spotkań powtórnych", "Cell colour: share of repeat encounters"], stops: [nc, css("--good")], min: 0, max: 1 }
+    : { title: ["Kolor komórki: średni feedback (ujemny – zły, dodatni – dobry)", "Cell colour: mean feedback (negative – bad, positive – good)"], stops: [css("--bad"), nc, css("--good")], min: -1, max: 1 });
   drawMap($("mapMem"), "personal");
   $("memTitle").textContent = "agent_memory – agent #" + snap.sel + (snap.sel_ch ? " (" + snap.sel_ch + ")" : "");
   $("stCycle").textContent = snap.cycle; $("stGames").textContent = snap.nb_game;
@@ -946,11 +967,40 @@ function showBatchResults() {
     $("bSummary").replaceChildren(h, table(["", ...cols], [[L("średnia", "mean"), ...mean], [L("odch. std.", "SD"), ...sd]]));
   }
   $("bTable").replaceChildren(table(data.head, data.rows));
+  boxState = { data, among: Object.keys((EXPS[$("bExp").value] || {}).among || {}) };
+  renderBox();
   const b = document.createElement("button"); b.className = "btn"; b.textContent = L("Pobierz ", "Download ") + fname;
   b.addEventListener("click", () => download(fname, py.globals.get("_batch_csv")(fname)));
   const c = document.createElement("button"); c.className = "btn"; c.textContent = "config.json";
   c.addEventListener("click", () => UX.downloadJSON("config.json", batchConfig));
   $("bDownloads").replaceChildren(b, c);
+}
+
+// O: wykres pudełkowy wyniku w wariantach (grupy = kombinacje parametrów „among”, inaczej variant_name)
+let boxState = null;
+function renderBox() {
+  const box = $("bBox");
+  if (!boxState || !boxState.data.rows.length) { box.hidden = true; return; }
+  const { head, rows } = boxState.data;
+  const num = head.filter((h, j) => rows.some((r) => typeof r[j] === "number") && !["seed", "run"].includes(h));
+  if (!num.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const sel = $("bBoxMetric");
+  if ([...sel.options].map((o) => o.value).join() !== num.join()) {
+    const old = sel.value;
+    sel.replaceChildren(...num.map((h) => new Option(h, h)));
+    sel.value = num.includes(old) ? old : (num.includes("share_ALLD") ? "share_ALLD" : num[num.length > 1 ? 1 : 0]);
+  }
+  let keys = boxState.among.filter((k) => head.includes(k));
+  if (!keys.length && head.includes("variant_name")) keys = ["variant_name"];
+  const vary = keys.filter((k) => new Set(rows.map((r) => r[head.indexOf(k)])).size > 1);
+  const j = head.indexOf(sel.value), groups = new Map();
+  rows.forEach((r) => {
+    const g = vary.map((k) => k + "=" + r[head.indexOf(k)]).join(", ") || L("wszystkie przebiegi", "all runs");
+    if (!groups.has(g)) groups.set(g, []);
+    if (typeof r[j] === "number") groups.get(g).push(r[j]);
+  });
+  UX.boxPlot($("bBoxCanvas"), [...groups].map(([label, values]) => ({ label, values })), sel.value);
 }
 
 // ---------- testy ----------
@@ -1023,6 +1073,7 @@ $("parkSel").addEventListener("change", () => {
   const custom = $("parkSel").value === "__custom";
   $("parkCustomRow").hidden = !custom;
   $("btnParkLib").disabled = custom;
+  if (PARK_GAL) PARK_GAL.mark($("parkSel").value);
 });
 let PARKS = null;
 $("btnParkLib").addEventListener("click", () => loadParkLib());
@@ -1232,7 +1283,7 @@ function renderGeoInfo() {
 I18N.onChange(() => {
   document.querySelectorAll("#paramForm summary").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_CAT_EN[el.dataset.pl] || el.dataset.pl); });
   document.querySelectorAll("#paramForm label[data-key]").forEach((el) => { el.textContent = L(el.dataset.pl, I18N_PARAM_EN[el.dataset.key] || el.dataset.pl); });
-  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo(); renderSetInfo(); renderVersion();
+  runLabel(); renderNet(); renderStats(); renderSpec(); renderGeoInfo(); renderZoneInfo(); renderSetInfo(); renderVersion(); renderRep(); renderBox();
   sortSelects();
   for (const ch of [chartScore, chartDunbar, chartShares]) {
     if (!ch) continue;
@@ -1379,10 +1430,102 @@ async function runTry(it, i) {
     if (!(await loadParkLib())) return;
   }
   tryLabel = v.label;
+  MOB.show("results");
   initModel();
   if (hasModel) { stopAt = 3000; start(); }
 }
-UX.tryCards($("tryList"), TRY, runTry);
+UX.tryCards($("tryList"), TRY, runTry, runReps);
+
+// ---------- K: oba warianty × 5 seedów, bez animacji ----------
+const REP_METRICS = [
+  { key: "gpp", pl: "gier na partnera", en: "games per partner" },
+  { key: "enc_rem", pl: "spotkań z pamiętanym (%)", en: "encounters with a remembered partner (%)" },
+  { key: "known", pl: "znanych partnerów (średnio)", en: "known partners (mean)" },
+  { key: "distinct", pl: "różnych partnerów w oknie", en: "distinct partners in window" },
+  { key: "share_d", pl: "udział D (%)", en: "share of D (%)" },
+];
+const REP_PY = "json.dumps({'gpp': M.mean_games_per_partner(), 'enc_rem': 100 * M.enc_share_remembered, " +
+  "'known': M.mean_known_partners(), 'distinct': M.mean_distinct_partners_window(), " +
+  "'share_d': 100 * M.nb_moves_D / max(1, M.nb_moves_C + M.nb_moves_D)})";
+let repStop = false, repLast = null;
+function renderRep() {
+  if (!repLast) return;
+  $("repTitle").textContent = L("Powtórzenia: ", "Replicates: ") + L(repLast.it.title[0], repLast.it.title[1]);
+  UX.repTable($("repTable"), repLast.it.variants.map((v) => v.label), REP_METRICS, repLast.res, repLast.seeds);
+}
+async function runReps(it) {
+  if (!py) return;
+  document.querySelector('nav.tabs button[data-tab="sim"]').click();
+  stop();
+  MOB.show("results");
+  UX.tryBanner($("tryBanner"), null);
+  const seeds = [1, 2, 3, 4, 5], res = it.variants.map(() => []), CYC = 3000;
+  repLast = { it, seeds, res };
+  repStop = false;
+  $("repPanel").hidden = false; $("repStop").disabled = false; $("repTable").replaceChildren();
+  renderRep();
+  $("repPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  const t0 = performance.now();
+  let err = "";
+  try {
+    for (let vi = 0; vi < it.variants.length && !repStop; vi++) {
+      const v = it.variants[vi];
+      if (v.park) {
+        $("parkSel").value = v.park; $("parkCustomRow").hidden = true;
+        if (!(await loadParkLib())) throw new Error($("geoInfo").textContent);
+        if (PARK_GAL) PARK_GAL.mark(v.park);
+      }
+      const params = Object.assign({}, DEFAULTS, TRY_BASE, v.params);
+      for (const seed of seeds) {
+        if (repStop) break;
+        py.globals.get("_new_model")(JSON.stringify(params), seed);
+        let c = 0;
+        while (c < CYC && !repStop) {
+          const n = Math.min(250, CYC - c);
+          py.runPython("M.run(" + n + ")"); c += n;
+          $("repProg").textContent = `${L("wariant", "variant")} ${vi + 1}/${it.variants.length} · seed ${seed} · ${L("cykl", "cycle")} ${c} · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        if (repStop) break;
+        res[vi].push(JSON.parse(py.runPython(REP_PY)));
+        renderRep();
+      }
+    }
+  } catch (e) { err = pyError(e); }
+  $("repProg").textContent = err ? L("Błąd: ", "Error: ") + err
+    : (repStop ? L("Zatrzymano", "Stopped") : L("Gotowe", "Done")) + ` · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+  $("repStop").disabled = true;
+  initModel();
+}
+$("repStop").onclick = () => { repStop = true; };
+UX.disabledHint("repStop", "Działa w trakcie liczenia powtórzeń.", "Active while replicates run.");
+
+// ---------- I, L, H, N: PNG, widok na telefon, samouczek, galeria parków ----------
+UX.pngButtons([...document.querySelectorAll('section[data-panel="sim"] figure.display'), $("cmpPanel"), $("bBox")]);
+const MOB = UX.mobileTabs(document.querySelector('section[data-panel="sim"]'));
+$("bBoxMetric").onchange = renderBox;
+function startTour(force) {
+  document.querySelector('nav.tabs button[data-tab="sim"]').click();
+  MOB.show("params");
+  UX.tour("sipd:samouczek", [
+    { el: () => document.querySelector(".source"), text: ["Tu wybierasz sieć: gotowy park z biblioteki, park z OSM albo własny GeoJSON. Bez pliku model użyje sieci syntetycznej.", "Choose the network here: a ready park from the library, a park from OSM or your own GeoJSON. Without a file the model uses a synthetic network."] },
+    { el: () => document.querySelector(".cat.basic"), text: ["Najważniejsze parametry. Najedź na nazwę albo kliknij „?”, żeby zobaczyć opis. Resztę pokazuje przycisk pod spodem.", "The key parameters. Hover over a name or click “?” to see its description. The button below shows the rest."] },
+    { el: () => $("btnInit"), text: ["Inicjalizuj tworzy agentów na sieci. Potem Start (spacja) albo Krok (→).", "Initialise places the agents on the network. Then Run (space) or Step (→)."] },
+    { el: () => { MOB.show("results"); return $("mapMain"); }, text: ["Mapa: agenci w kolorach charakterów i komórki według wybranej warstwy. Skala pod mapą objaśnia kolory. Kliknij agenta, żeby zobaczyć jego pamięć.", "The map: agents coloured by character and cells by the chosen layer. The scale below the map explains the colours. Click an agent to see its memory."] },
+    { el: () => $("cmpPanel"), text: ["Porównanie: zapamiętaj przebieg, zmień ustawienia i uruchom ponownie, żeby zobaczyć oba na jednym wykresie.", "Comparison: keep a run, change the settings and run again to see both on one chart."] },
+    { el: () => document.querySelector('nav.tabs button[data-tab="about"]'), text: ["W zakładce O modelu jest opis i gotowe eksperymenty „Co wypróbować”, uruchamiane jednym kliknięciem.", "The About tab has the description and ready experiments under “Things to try”, run with one click."] },
+  ], force);
+}
+$("btnTour").onclick = () => startTour(true);
+let PARK_GAL = null;
+fetch("parki/index.json", { cache: "no-cache" }).then((r) => r.json()).then((d) => {
+  PARKS = d.parks;
+  PARK_GAL = UX.gallery($("parkGallery"), d.parks, "parki/mini/", (name) => {
+    $("parkSel").value = name; $("parkCustomRow").hidden = true; $("btnParkLib").disabled = false;
+    PARK_GAL.mark(name);
+    loadParkLib();
+  });
+}).catch(() => { $("parkGallery").hidden = true; });
 
 // ---------- jak cytować i wersja modelu ----------
 const CITE = "Dziedzic, S. (2026). SIPD: Spatial Iterated Prisoner's Dilemma (GAMA model, Python port and browser app) " +
