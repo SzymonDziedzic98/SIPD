@@ -2033,6 +2033,7 @@ UX.a11y({ main: $("main"), tabs: document.querySelector("nav.tabs"), live: [$("m
 [$("bBoxCanvas"), $("bHeat"), $("vCanvas"), $("gCanvas")].forEach((c) => c.setAttribute("role", "img"));
 UX.pngButtons([...document.querySelectorAll('section[data-panel="sim"] figure.display'), $("cmpPanel"), $("bBox"), $("bHeatBox"), $("vBox"), $("gBox")]);
 const MOB = UX.mobileTabs(document.querySelector('section[data-panel="sim"]'));
+UX.runBar(document.querySelector('section[data-panel="sim"]'), $("btnInit").parentElement, $("status"));
 $("bBoxMetric").onchange = renderBox;
 function startTour(force) {
   document.querySelector('nav.tabs button[data-tab="sim"]').click();
