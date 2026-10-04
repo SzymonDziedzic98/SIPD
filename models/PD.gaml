@@ -514,10 +514,10 @@ global {
 		loop i from: 0 to: length(nodes) - 1 {
 			list<int> nb <- [];
 			list<float> ln <- [];
-			if nodes[i] in edge_geom.keys {
+			if (edge_geom contains_key nodes[i]) {
 				map<point, list<point>> m <- edge_geom[nodes[i]];
 				loop z over: m.keys {
-					if z in node_idx.keys {
+					if (node_idx contains_key z) {
 						nb <+ node_idx[z];
 						ln <+ polyline_length(m[z]);
 					}
@@ -568,7 +568,7 @@ global {
 				loop k from: 0 to: length(nb) - 1 {
 					if empty(nb) { break; }
 					int u <- nb[k];
-					if empty(skip) or !((string(v) + "|" + string(u)) in skip.keys) {
+					if empty(skip) or !((skip contains_key (string(v) + "|" + string(u)))) {
 						float du <- dv + ln[k];
 						if dist[u] < 0 or du < dist[u] {
 							dist[u] <- du;
@@ -781,7 +781,7 @@ global {
 			}
 			loop v over: comp {
 				if inside[v] {
-					bool crossing <- !empty(nadj[v] where ((each in inside.keys) and !inside[each]));
+					bool crossing <- !empty(nadj[v] where (((inside contains_key each)) and !inside[each]));
 					bool dead_end <- length(nadj[v]) = 1 and near[v];
 					if crossing or dead_end { ent <+ v; }
 				}
@@ -867,7 +867,7 @@ global {
 
 	// odległości sieciowe z węzła v do węzłów najwyżej radius (Dijkstra z odcięciem, zapamiętane; jak _dist_from)
 	map<int, float> dist_from(int v, float radius) {
-		if v in net_dist_cache.keys { return net_dist_cache[v]; }
+		if (net_dist_cache contains_key v) { return net_dist_cache[v]; }
 		map<int, float> d <- [v::0.0];
 		list<int> open <- [v];
 		loop while: !empty(open) {
@@ -880,7 +880,7 @@ global {
 				if empty(nb) { break; }
 				int w <- nb[k];
 				float dw <- du + ln[k];
-				if dw <= radius and (!(w in d.keys) or dw < d[w]) {
+				if dw <= radius and (!((d contains_key w)) or dw < d[w]) {
 					d[w] <- dw;
 					if !(w in open) { open <+ w; }
 				}
@@ -906,7 +906,7 @@ global {
 				map<int, float> dist_u <- dist_from(u, radius);
 				loop ib over: [0, 2] {
 					int w <- int(pb[ib]);
-					if w in dist_u.keys { best <- min(best, du + dist_u[w] + pb[ib + 1]); }
+					if (dist_u contains_key w) { best <- min(best, du + dist_u[w] + pb[ib + 1]); }
 				}
 			}
 		}
@@ -922,8 +922,8 @@ global {
 	}
 
 	action put_edge(point a, point z, list<point> pts, float len) {
-		map<point, list<point>> m <- (a in edge_geom.keys) ? edge_geom[a] : map<point, list<point>>([]);
-		if !(z in m.keys) or polyline_length(m[z]) > len {
+		map<point, list<point>> m <- ((edge_geom contains_key a)) ? edge_geom[a] : map<point, list<point>>([]);
+		if !((m contains_key z)) or polyline_length(m[z]) > len {
 			m[z] <- pts;
 		}
 		edge_geom[a] <- m;
@@ -994,7 +994,7 @@ global {
 					list<point> nxt <- [];
 					loop v over: frontier {
 						loop u over: list<point>(path_network neighbors_of v) {
-							if !(u in dist.keys) {
+							if !((dist contains_key u)) {
 								dist[u] <- dist[v] + 1;
 								nxt <+ u;
 							}
@@ -1062,6 +1062,18 @@ global {
 	// --- Metryka stabilności sieci spotkań (opisowa) ---
 	// "pamiętany" = partner w known_others (po zapominaniu z limitu Dunbara); "znany" = spotkany kiedykolwiek
 	int encounter_window <- 1000;
+	// Instrumentacja komórek (tylko odczyt stanu; dynamika bez zmian): na grę po cyklu cell_stats_from, na komórkę
+	// gracza 1 i okno cell_stats_window cykli (najwyżej cell_stats_max_w + 1 okien): gry, suma wcześniejszych gier pary,
+	// gry pary < 3 i >= 10, suma kandydatów w promieniu, obustronne C, ruchy D, wcześniejsze epizody pary (przerwa > 50
+	// i > 300 cykli). Jak instrumentacja skryptów SIPD-A (realny_park) i SIPD-D (pilot_run, v4/epizody) na porcie.
+	bool cell_stats_export <- false;
+	int cell_stats_from <- 5000;
+	int cell_stats_window <- 1000000000;
+	int cell_stats_max_w <- 1000000;
+	map<string, list<int>> cs_acc <- [];
+	map<string, list<int>> cs_epi <- [];     // para -> [ostatnie spotkanie, epizody G=50, epizody G=300]
+	list<int> cs_byp <- [0, 0, 0, 0];        // przechodzący: gry, na obejściu, na obejściu z nieprzechodzącym, wszystkie gry
+	int last_pool <- 0;
 	bool encounter_export <- false;          // macierz komórek do encounter_cells.csv na końcu przebiegu
 	float enc_share_remembered <- 0.0;       // ostatnie okno: średni udział spotkań z partnerem pamiętanym
 	float enc_share_ever <- 0.0;             // ostatnie okno: średni udział spotkań z partnerem spotkanym wcześniej
@@ -1083,17 +1095,65 @@ global {
 
 	// zdarzenie po każdej grze - punkt zaczepienia dla obserwatorów (Faza 7: świadkowie, image scoring)
 	action on_game_played(game g) {
+		if cell_stats_export { do cell_stats_game(g); }
 		ask g.p1 { do record_encounter(g.p2, g.knew1_rem, g.knew1_ever, g.cell1); }
 		ask g.p2 { do record_encounter(g.p1, g.knew2_rem, g.knew2_ever, g.cell2); }
 		if bank_active {
 			loop pr over: [[g.p1, g.p2], [g.p2, g.p1]] {
 				player a <- player(pr[0]);
 				player bb <- player(pr[1]);
-				if !(bb in a.first_met_visit.keys) { a.first_met_visit[bb] <- a.visit_no; }
+				if !((a.first_met_visit contains_key bb)) { a.first_met_visit[bb] <- a.visit_no; }
 				bank_games <- bank_games + 1;
 				if a.first_met_visit[bb] < a.visit_no { bank_cross_visit <- bank_cross_visit + 1; }
 			}
 		}
+	}
+
+	action cell_stats_game(game g) {
+		string key <- g.pair_key;
+		list<int> st <- ((cs_epi contains_key key)) ? cs_epi[key] : [-1, 0, 0];
+		bool new50 <- st[0] < 0 or cycle - st[0] > 50;
+		bool new300 <- st[0] < 0 or cycle - st[0] > 300;
+		if cycle > cell_stats_from and g.cell1 != nil {
+			int w <- min(cell_stats_max_w, int((cycle - cell_stats_from - 1) / cell_stats_window));
+			string ck <- string(g.cell1.grid_x) + "|" + string(g.cell1.grid_y) + "|" + string(w);
+			list<int> acc <- ((cs_acc contains_key ck)) ? cs_acc[ck] : [0, 0, 0, 0, 0, 0, 0, 0, 0];
+			int k <- ((g.p1.met_count contains_key g.p2)) ? g.p1.met_count[g.p2] : 0;
+			acc[0] <- acc[0] + 1;
+			acc[1] <- acc[1] + k;
+			if k < 3 { acc[2] <- acc[2] + 1; }
+			if k >= 10 { acc[3] <- acc[3] + 1; }
+			acc[4] <- acc[4] + last_pool;
+			if g.p1_move = "C" and g.p2_move = "C" { acc[5] <- acc[5] + 1; }
+			acc[6] <- acc[6] + (g.p1_move = "D" ? 1 : 0) + (g.p2_move = "D" ? 1 : 0);
+			acc[7] <- acc[7] + st[1] - (new50 ? 0 : 1);
+			acc[8] <- acc[8] + st[2] - (new300 ? 0 : 1);
+			cs_acc[ck] <- acc;
+			loop pr over: [[g.p1, g.p2], [g.p2, g.p1]] {
+				player a <- player(pr[0]);
+				player bb <- player(pr[1]);
+				if a.through {
+					bool onb <- a.prev_node != nil and a.target_node != nil and
+						((outside contains_key (string(node_idx[a.prev_node]) + "|" + string(node_idx[a.target_node]))));
+					cs_byp[0] <- cs_byp[0] + 1;
+					if onb { cs_byp[1] <- cs_byp[1] + 1; }
+					if onb and !bb.through { cs_byp[2] <- cs_byp[2] + 1; }
+				}
+			}
+			cs_byp[3] <- cs_byp[3] + 1;
+		}
+		cs_epi[key] <- [cycle, st[1] + (new50 ? 1 : 0), st[2] + (new300 ? 1 : 0)];
+	}
+
+	reflex export_cell_stats when: cell_stats_export and cycle = end_cycle {
+		loop ck over: cs_acc.keys {
+			list<string> f <- ck split_with "|";
+			list<int> a <- cs_acc[ck];
+			save [variant_name, seed, int(f[0]), int(f[1]), int(f[2]), a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]]
+				to: "../results/cell_stats.csv" rewrite: false format: "csv" header: false;
+		}
+		save [variant_name, seed, cs_byp[0], cs_byp[1], cs_byp[2], cs_byp[3]]
+			to: "../results/through_bypass.csv" rewrite: false format: "csv" header: false;
 	}
 
 	reflex export_encounter_cells when: encounter_export and cycle = end_cycle {
@@ -1368,7 +1428,7 @@ global {
 	float average_feedback(environment_cell cell) {
 		list<float> values <- [];
 		loop p over: player {
-			if cell in p.personal_feedback.keys {
+			if (p.personal_feedback contains_key cell) {
 				values <+ p.personal_feedback[cell];
 			}
 		}
@@ -1425,7 +1485,7 @@ global {
 			loop q over: aq {
 				if p!= q {
 					total <- total + 1;
-					float v <- (q in p.social_feedback.keys) ? p.social_feedback[q] : 0.0;
+					float v <- ((p.social_feedback contains_key q)) ? p.social_feedback[q] : 0.0;
 					if v > 0.5 {
 						high <- high + 1;
 					}
@@ -1636,7 +1696,7 @@ grid environment_cell width: grid_cols height: grid_rows neighbors: 8 {
 		if p = nil {
 			return #white;
 		}
-		float fb <- (self in p.personal_feedback.keys) ? p.personal_feedback[self] : 0.0;
+		float fb <- ((p.personal_feedback contains_key self)) ? p.personal_feedback[self] : 0.0;
 		if fb > 0 {
 			return rgb(255 * (1 - fb), 255, 255 * (1 - fb));
 		} else if fb < 0 {
@@ -1681,9 +1741,9 @@ species game{
 		player first_player <- p1;
 		player second_player <- p2;
 		knew1_rem <- second_player in p1.known_others;
-		knew1_ever <- second_player in p1.met_count.keys;
+		knew1_ever <- (p1.met_count contains_key second_player);
 		knew2_rem <- first_player in p2.known_others;
-		knew2_ever <- first_player in p2.met_count.keys;
+		knew2_ever <- (p2.met_count contains_key first_player);
 		ask p1 { do ensure_partner(second_player); }
 		ask p2 { do ensure_partner(first_player); }
 		p1_move <- p1.strategy(p2);
@@ -1871,6 +1931,8 @@ species player skills: [moving] {
 	point target_node;
 	list<point> path_pts <- [];              // polilinia bieżącej krawędzi (od węzła startowego)
 	float path_pos <- 0.0;                   // przebyta długość na tej krawędzi
+	list<float> path_cum <- [];              // skumulowane długości polilinii (liczone raz na krawędź)
+	int seg_i <- 0;                          // bieżący odcinek polilinii (pozycja tylko rośnie)
 	// Moduł 4: energia i zmęczenie (bez wpływu na nic przy rest_on = false)
 	float energy <- 1.0;
 	float fatigue <- 0.0;                    // utrata energii na metr
@@ -1896,7 +1958,7 @@ species player skills: [moving] {
 	// położenie na sieci [węzeł a, odl. od a, węzeł b, odl. od b] (jak _net_pos w porcie)
 	list<float> net_pos {
 		if !empty(path_pts) and prev_node != nil and target_node != nil and prev_node != target_node {
-			float L <- world.polyline_length(path_pts);
+			float L <- last(path_cum);
 			float d <- min(path_pos, L);
 			return [float(node_idx[prev_node]), d, float(node_idx[target_node]), L - d];
 		}
@@ -1946,7 +2008,7 @@ species player skills: [moving] {
 			dests_left <- 0;
 			used_bypass <- false;
 			goal_kind <- "through";
-			goal <- (cur in opposite.keys) ? opposite[cur] : -1;
+			goal <- ((opposite contains_key cur)) ? opposite[cur] : -1;
 			if goal < 0 { goal <- one_of(entrances - cur); }   // start poza wejściem (pierwsza wizyta)
 			return;
 		}
@@ -1992,7 +2054,9 @@ species player skills: [moving] {
 		if goal_kind = "dest" {
 			dest_arrivals <- dest_arrivals + 1;
 			dests_left <- dests_left - 1;
-			dwell_left <- max(1, round(exp_rnd(1.0 / dest_dwell)));
+			// rozkład wykładniczy o średniej dest_dwell przez odwrotną dystrybuantę (jak expovariate w porcie);
+			// exp_rnd w GAMA 2025 dawało tu pobyty ~1 cykl
+			dwell_left <- max(1, round(-dest_dwell * ln(max(1.0e-12, 1.0 - rnd(1.0)))));
 			return;
 		}
 		dest_exits <- dest_exits + 1;
@@ -2100,7 +2164,7 @@ species player skills: [moving] {
 
 	action register_betrayal(environment_cell cell) {
 	    if cell = nil { return; }
-	    int old_val <- (cell in betrayal_count_at_location.keys) ? betrayal_count_at_location[cell] : 0;
+	    int old_val <- ((betrayal_count_at_location contains_key cell)) ? betrayal_count_at_location[cell] : 0;
 	    betrayal_count_at_location[cell] <- old_val + 1;
 	}
 
@@ -2113,7 +2177,7 @@ species player skills: [moving] {
 	    }
 	    environment_cell here <- world.cell_at(location);
 	    bool risky <- (here != nil)
-	        and (here in betrayal_count_at_location.keys)
+	        and ((betrayal_count_at_location contains_key here))
 	        and (betrayal_count_at_location[here] >= generalization_threshold);
 	    return base_state + "|" + (risky ? "RISKY" : "SAFE");
 	}
@@ -2163,7 +2227,7 @@ species player skills: [moving] {
 		map<point, float> weights <- map<point, float>([]);
 		loop c over: candidates {
 			environment_cell cell <- world.cell_at(c);
-			float fb <- (cell != nil and cell in personal_feedback.keys) ? personal_feedback[cell] : 0.0;
+			float fb <- (cell != nil and (personal_feedback contains_key cell)) ? personal_feedback[cell] : 0.0;
 			float social <- social_sensitivity > 0 ? social_score(c) : 0.0;
 			weights[c] <- exp(sensitivity * fb + social_sensitivity * social);
 		}
@@ -2219,7 +2283,7 @@ species player skills: [moving] {
 			: list(path_network neighbors_of current_node);
 		int cur <- bypass_active ? node_idx[current_node] : -1;
 		if bypass_active and !through {
-			list<point> inner <- neighbors where !((string(cur) + "|" + string(node_idx[each])) in outside.keys);
+			list<point> inner <- neighbors where !((outside contains_key (string(cur) + "|" + string(node_idx[each]))));
 			if !empty(inner) { neighbors <- inner; }
 		}
 		if empty(neighbors) {
@@ -2227,11 +2291,18 @@ species player skills: [moving] {
 			path_pts <- [];
 		} else {
 			point new_target <- choose_direction(neighbors);
-			if bypass_active and ((string(cur) + "|" + string(node_idx[new_target])) in outside.keys) { used_bypass <- true; }
+			if bypass_active and ((outside contains_key (string(cur) + "|" + string(node_idx[new_target])))) { used_bypass <- true; }
 			prev_node <- current_node;
-			path_pts <- (current_node in edge_geom.keys and new_target in edge_geom[current_node].keys)
+			path_pts <- ((edge_geom contains_key current_node) and (edge_geom[current_node] contains_key new_target))
 				? edge_geom[current_node][new_target] : [current_node, new_target];
 			path_pos <- 0.0;
+			seg_i <- 0;
+			path_cum <- [0.0];
+			float acc <- 0.0;
+			loop i from: 0 to: length(path_pts) - 2 {
+				acc <- acc + sqrt((path_pts[i + 1].x - path_pts[i].x) ^ 2 + (path_pts[i + 1].y - path_pts[i].y) ^ 2);
+				path_cum <+ acc;
+			}
 			target_node <- new_target;
 			current_node <- target_node;
 		}
@@ -2240,32 +2311,28 @@ species player skills: [moving] {
 	// jak reflex_move_on_network w porcie: move_speed wzdłuż polilinii krawędzi, bez przenoszenia
 	// reszty dystansu przez węzeł
 	action move_on_network {
+		// to samo co pętla po odcinkach od początku krawędzi w porcie, ale od bieżącego odcinka (pozycja tylko rośnie);
+		// 41 wierzchołków na krawędź w parkach OSM robiło z tej pętli główny koszt przebiegu
 		if empty(path_pts) {
 			location <- target_node;
 		} else {
 			float pos <- path_pos + move_speed;
-			float acc <- 0.0;
-			bool done <- false;
 			int last_i <- length(path_pts) - 2;
-			int i <- 0;
-			loop while: !done and i <= last_i {
+			int i <- seg_i;
+			loop while: i <= last_i and path_cum[i + 1] < pos { i <- i + 1; }
+			if i > last_i {
+				location <- target_node;
+				path_pos <- path_cum[last_i + 1];
+				seg_i <- last_i;
+			} else {
 				point p0 <- path_pts[i];
 				point p1 <- path_pts[i + 1];
-				float seg <- sqrt((p1.x - p0.x) ^ 2 + (p1.y - p0.y) ^ 2);
-				if acc + seg >= pos {
-					float t <- seg > 0 ? (pos - acc) / seg : 1.0;
-					location <- {p0.x + t * (p1.x - p0.x), p0.y + t * (p1.y - p0.y)};
-					path_pos <- pos;
-					if i = last_i and t >= 1.0 { location <- target_node; }
-					done <- true;
-				} else {
-					acc <- acc + seg;
-				}
-				i <- i + 1;
-			}
-			if !done {
-				location <- target_node;
-				path_pos <- acc;
+				float seg <- path_cum[i + 1] - path_cum[i];
+				float tt <- seg > 0 ? (pos - path_cum[i]) / seg : 1.0;
+				location <- {p0.x + tt * (p1.x - p0.x), p0.y + tt * (p1.y - p0.y)};
+				path_pos <- pos;
+				seg_i <- i;
+				if i = last_i and tt >= 1.0 { location <- target_node; }
 			}
 		}
 	}
@@ -2286,12 +2353,12 @@ species player skills: [moving] {
 		if cell = nil {
 			return;
 		}
-		float old_val <- (cell in personal_feedback.keys) ? personal_feedback[cell] : 0.0;
+		float old_val <- ((personal_feedback contains_key cell)) ? personal_feedback[cell] : 0.0;
 		personal_feedback[cell] <- old_val + cell_learning_rate * (value - old_val);
 	}
 
 	action update_social_feedback(player opponent, float value) {
-		float old_val <- (opponent in social_feedback.keys) ? social_feedback[opponent] : 0.0;
+		float old_val <- ((social_feedback contains_key opponent)) ? social_feedback[opponent] : 0.0;
 		social_feedback[opponent] <- old_val + social_learning_rate * (value - old_val);
 	}
 
@@ -2321,7 +2388,7 @@ species player skills: [moving] {
 
 	// świeży wpis dla partnera - jak dla nowo poznanego (także po zapomnieniu)
 	action ensure_partner(player other) {
-		if not (other in lists_per_other.keys) {
+		if not ((lists_per_other contains_key other)) {
 			do init_beliefs_for(other);
 		}
 	}
@@ -2340,7 +2407,7 @@ species player skills: [moving] {
 		if rem { enc_rep_rem <- enc_rep_rem + 1; }
 		if ever { enc_rep_ever <- enc_rep_ever + 1; }
 		if !(other in enc_partners) { enc_partners <+ other; }
-		met_count[other] <- ((other in met_count.keys) ? met_count[other] : 0) + 1;
+		met_count[other] <- (((met_count contains_key other)) ? met_count[other] : 0) + 1;
 		if cell != nil { ask cell { do record_encounter(rem, ever); } }
 	}
 
@@ -2393,7 +2460,7 @@ species player skills: [moving] {
 	// nowy stan zawsze startuje z priorem initial_cooperation_bias - niezależnie od tego,
 	// czy pierwszy raz pojawia się w QLEARN, czy jako next_s w update_q
 	action ensure_q_state(player opponent, string s) {
-		if not (s in q_d_per_other[opponent].keys) {
+		if not ((q_d_per_other[opponent] contains_key s)) {
 			q_d_per_other[opponent][s] <- (1 - initial_cooperation_bias);
 			q_c_per_other[opponent][s] <- initial_cooperation_bias;
 		}
@@ -2410,7 +2477,7 @@ species player skills: [moving] {
 
 		float max_next_q <- max(q_d_per_other[opponent][next_s], q_c_per_other[opponent][next_s]);
 
-		float social_pref <- (opponent in social_feedback.keys) ? social_feedback[opponent] : 0.0;
+		float social_pref <- ((social_feedback contains_key opponent)) ? social_feedback[opponent] : 0.0;
 		float effective_lr <- learning_rate * (1 + social_learning_boost * social_pref);
 		effective_lr <- max(0.01, min(0.99, effective_lr));
 
@@ -2462,7 +2529,7 @@ species player skills: [moving] {
 		    }
 		}
 
-		if (character = "QLEARN" or character = "AQLEARN") and (p in pending_action.keys) {
+		if (character = "QLEARN" or character = "AQLEARN") and ((pending_action contains_key p)) {
 		    pending_action[p] <- base_move;   // domknięcie: pending_action = to, co naprawdę zagrano
 		}
 
@@ -2540,7 +2607,7 @@ species player skills: [moving] {
 	}
 
 	string GRIM(player p) {
-		int since <- (p in history_offset.keys) ? history_offset[p] : 0;
+		int since <- ((history_offset contains_key p)) ? history_offset[p] : 0;
 		if since = 0 {
 			return (lists_per_other[p] contains "D") ? "D" : "C";
 		}
@@ -2570,7 +2637,7 @@ species player skills: [moving] {
 		do ensure_q_state(p, s);
 
 		environment_cell here <- world.cell_at(location);
-		float env_fb <- (here != nil and here in personal_feedback.keys) ? personal_feedback[here] : 0.0;
+		float env_fb <- (here != nil and (personal_feedback contains_key here)) ? personal_feedback[here] : 0.0;
 
 		float adjusted_q_d <- q_d_per_other[p][s] - env_influence * env_fb;
 		float adjusted_q_c <- q_c_per_other[p][s] + env_influence * env_fb;
@@ -2606,6 +2673,7 @@ species player skills: [moving] {
 			list<float> pm <- net_pos();
 			nearby <- nearby where (world.network_distance(pm, each.net_pos(), vision_radius) <= vision_radius);
 		}
+		if cell_stats_export { last_pool <- length(nearby); }
 		// Moduł 3: w well_mixed z prawdopodobieństwem α partner spośród krewnych
 		if well_mixed and kin_on and kin_matching_prob > 0 and flip(kin_matching_prob) {
 			string my_char <- character;
@@ -2623,7 +2691,7 @@ species player skills: [moving] {
 
 				string key <- world.pair_key(a,b);
 
-				if !(key in world.active_pairs.keys) {
+				if !((world.active_pairs contains_key key)) {
 					point pn1 <- self.location;
 					point pn2 <- enemy.location;
 
@@ -3724,7 +3792,7 @@ experiment test_lazy_partner_init type: test {
         create player with: [character::"TFT"] number: 2 returns: pair;
         player a <- pair[0];
         player b <- pair[1];
-        assert not (b in a.lists_per_other.keys);
+        assert not ((a.lists_per_other contains_key b));
         create game with: [p1::a, p2::b, pair_key::"t"] number: 1;
         assert length(a.lists_per_other[b]) = 1;
         assert length(b.lists_per_other[a]) = 1;
@@ -3744,28 +3812,28 @@ experiment test_forget_clears_all_maps type: test {
         ask a { do setup_lists(); }
         create game with: [p1::a, p2::b, pair_key::"t"] number: 1;
 
-        assert b in a.lists_per_other.keys;
-        assert b in a.my_moves_per_other.keys;
-        assert b in a.q_c_per_other.keys;
-        assert b in a.q_d_per_other.keys;
-        assert b in a.pending_state.keys;
-        assert b in a.pending_action.keys;
-        assert b in a.social_feedback.keys;
+        assert (a.lists_per_other contains_key b);
+        assert (a.my_moves_per_other contains_key b);
+        assert (a.q_c_per_other contains_key b);
+        assert (a.q_d_per_other contains_key b);
+        assert (a.pending_state contains_key b);
+        assert (a.pending_action contains_key b);
+        assert (a.social_feedback contains_key b);
         assert b in a.known_others;
 
         ask a { do forget_partner(pair[1]); }
 
-        assert not (b in a.lists_per_other.keys);
-        assert not (b in a.my_moves_per_other.keys);
-        assert not (b in a.q_c_per_other.keys);
-        assert not (b in a.q_d_per_other.keys);
-        assert not (b in a.pending_state.keys);
-        assert not (b in a.pending_action.keys);
-        assert not (b in a.social_feedback.keys);
+        assert not ((a.lists_per_other contains_key b));
+        assert not ((a.my_moves_per_other contains_key b));
+        assert not ((a.q_c_per_other contains_key b));
+        assert not ((a.q_d_per_other contains_key b));
+        assert not ((a.pending_state contains_key b));
+        assert not ((a.pending_action contains_key b));
+        assert not ((a.social_feedback contains_key b));
         assert not (b in a.known_others);
         assert a.nb_forgotten = 1;
 
-        assert a in b.lists_per_other.keys;   // b nadal pamięta a
+        assert (b.lists_per_other contains_key a);   // b nadal pamięta a
         assert a in b.known_others;
     }
 }
@@ -3791,8 +3859,8 @@ experiment test_lru_keeps_most_recent type: test {
 
         create game with: [p1::a, p2::d, pair_key::"ad1"] number: 1;   // wypada c, nie b
         assert a.known_others = [b, d];
-        assert not (c in a.lists_per_other.keys);
-        assert b in a.lists_per_other.keys;
+        assert not ((a.lists_per_other contains_key c));
+        assert (a.lists_per_other contains_key b);
         assert length(a.lists_per_other[b]) = 2;   // historia z b zachowana
 
         // partner bieżącej gry nigdy nie wypada, nawet przy limicie 1
