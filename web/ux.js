@@ -681,6 +681,8 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
     const n = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
     const head = ["", "n", ...extra.map((x) => L(x.pl, x.en)), ...metrics.map((m) => L(m.pl, m.en))];
     const tr0 = t.insertRow(); head.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    // nagłówek kolumny grup tylko dla czytników ekranu
+    const c0 = document.createElement("span"); c0.className = "sr-only"; c0.textContent = L("Grupa", "Group"); tr0.cells[0].append(c0);
     groups.forEach((g) => {
       const tr = t.insertRow();
       const cells = [g.label, String(g.recs.length), ...extra.map((x) => x.get(g)),
