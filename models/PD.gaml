@@ -172,7 +172,7 @@ global {
 
 	action evolution_step {
 		map<player, string> decisions <- map<player, string>([]);
-		loop p over: player where (each.character in evolvable_characters) {
+		loop p over: player where (each.character in evolvable_characters and each.in_park) {
 			decisions[p] <- p.evolution_choice(p.pick_model());
 		}
 		float allc0 <- 0.0;
@@ -381,6 +381,80 @@ global {
 	// false (domyślnie) = dotychczasowe zachowanie: closest_to po wszystkich wierzchołkach
 	bool network_cleanup <- false;
 	list<point> placement_vertices <- [];
+	// geometria krawędzi w obu kierunkach (jak adj w porcie: z krawędzi równoległych krótsza)
+	map<point, map<point, list<point>>> edge_geom <- [];
+	// indeks grafu dla modułów 4-6: węzły jako liczby, sąsiedzi i długości krawędzi (jak adj w porcie)
+	list<point> nodes <- [];
+	map<point, int> node_idx <- [];
+	list<list<int>> nadj <- [];
+	list<list<float>> nlen <- [];
+
+	// --- Moduł 4: strefy odpoczynku i zmęczenie (domyślnie wyłączony; jak _setup_rest_zones w porcie) ---
+	bool rest_on <- false;
+	int rest_zone_count <- 10;             // liczba stref (węzły sieci)
+	string rest_zone_placement <- "dispersed";   // "dispersed" | "central" | "peripheral" | "random"
+	string rest_zone_file <- "";           // SHP/GeoJSON z punktami (ten sam układ co sieć); niepusty = strefy z pliku
+	float frail_share <- 0.2;              // udział osób starszych / schorowanych
+	float fatigue_regular_mean <- 0.07;    // utrata energii na 100 m - zwykli
+	float fatigue_regular_sd <- 0.015;
+	float fatigue_frail_mean <- 0.2;       // starsi / schorowani
+	float fatigue_frail_sd <- 0.05;
+	float rest_threshold <- 0.3;           // poniżej tej energii agent idzie do najbliższej strefy
+	float rest_recovery <- 0.005;          // odzysk energii na cykl
+	float rest_target <- 1.0;              // energia, przy której agent wstaje
+	bool rest_active <- false;             // moduł faktycznie działa (sieć, nie well_mixed)
+	list<int> rest_zones <- [];
+	list<int> rest_hop <- [];              // węzeł -> następny węzeł w stronę najbliższej strefy (-1 = brak)
+	int rest_games <- 0;
+	int rest_bouts <- 0;
+
+	// --- Moduł 5: bank odwiedzających (rotacja; domyślnie wyłączony; jak _setup_bank w porcie) ---
+	// compat_N = cała pula; w parku średnio bank_present_share z nich, reszta czeka w banku z pełną pamięcią
+	bool bank_on <- false;
+	float bank_present_share <- 0.25;
+	int bank_mean_stay <- 1000;            // średnia długość wizyty (cykle, rozkład geometryczny)
+	bool bank_active <- false;
+	list<point> bank_nodes <- [];
+	float bank_present_sum <- 0.0;
+	int bank_samples <- 0;
+	int bank_entries <- 0;
+	int bank_games <- 0;
+	int bank_cross_visit <- 0;
+	int exit_walk_sum <- 0;                // Moduł 6 + bank: marsze do wyjścia (cykle)
+	int exit_walk_n <- 0;
+
+	// --- Moduł 6: ruch z wejściami i celami (movement_mode = "destinations"; jak _setup_destinations w porcie) ---
+	// agent wchodzi wejściem, idzie najkrótszą drogą do kolejnych celów, zostaje w każdym na chwilę, potem idzie
+	// do najbliższego wejścia i wychodzi (z bankiem: do banku; bez banku: wraca losowym wejściem z nową wizytą)
+	string dest_file <- "";                // SHP z punktami celów (układ sieci); pusty = dest_count węzłów
+	int dest_count <- 10;
+	string dest_placement <- "random";     // "random" | "dispersed" | "central" | "peripheral"
+	int dest_dwell <- 200;                 // średni pobyt w celu (cykle, rozkład wykładniczy)
+	float dest_per_visit <- 2.0;           // średnia liczba celów na wizytę (rozkład geometryczny, min. 1)
+	float dest_share <- 1.0;               // udział odwiedzających z celami; reszta błądzi (spacer bez celu)
+	// wejścia: SHP z punktami albo obrysem parku (wielokąty); przy obrysie wejściem jest węzeł wewnątrz, z którego
+	// krawędź wychodzi poza obrys, albo ślepy koniec najwyżej entrance_dist m od obrysu; pusty = liście sieci na obrzeżu
+	string entrance_file <- "";
+	float entrance_dist <- 20.0;
+	string partner_distance <- "euclid";   // "euclid" (linia prosta) | "network" (po ścieżkach)
+	bool bypass_on <- false;               // obejście wokół parku (bypass_file): korzystają z niego tylko przechodzący
+	string bypass_file <- "";              // SHP z liniami obejścia (warstwa "bypass" pliku wejść w porcie)
+	float through_share <- 0.0;            // udział przechodzących: wejście -> przeciwległe wejście
+	bool dest_active <- false;
+	list<int> dests <- [];
+	list<int> entrances <- [];
+	map<int, list<int>> dest_hops <- [];   // cel -> węzeł -> następny węzeł (-1 = brak)
+	list<int> exit_hops <- [];             // do najbliższego wejścia
+	map<string, bool> outside <- [];       // krawędzie obejścia "a|b" w obu kierunkach
+	bool bypass_active <- false;
+	map<int, int> opposite <- [];          // wejście -> przeciwległe
+	map<int, list<int>> through_hops <- [];
+	bool through_active <- false;
+	int through_trips <- 0;
+	int through_bypass_trips <- 0;
+	int dest_arrivals <- 0;
+	int dest_exits <- 0;
+	map<int, map<int, float>> net_dist_cache <- [];   // partner_distance = network: węzeł -> {węzeł: odległość <= promień}
 	int net_components_baseline <- 0;
 	// charakterystyka sieci (raz na przebieg)
 	int net_nodes <- 0;
@@ -407,11 +481,460 @@ global {
 			do add_shortcuts();
 		}
 		path_network <- as_edge_graph(path_segment);
+		do build_edge_geom();
 		placement_vertices <- list<point>(path_network.vertices);
 		if network_cleanup {
 			list<list> comps <- connected_components_of(path_network);
 			if !empty(comps) { placement_vertices <- list<point>(comps with_max_of (length(each))); }
 		}
+	}
+
+	// ruch idzie wzdłuż wybranej krawędzi (jak port), a nie najkrótszą drogą w grafie (goto on:)
+	action build_edge_geom {
+		edge_geom <- [];
+		loop sg over: path_segment {
+			list<point> pts <- sg.shape.points;
+			point a <- first(pts);
+			point z <- last(pts);
+			if a != z {
+				float len <- polyline_length(pts);
+				do put_edge(a, z, pts, len);
+				do put_edge(z, a, reverse(pts), len);
+			}
+		}
+		do build_node_index();
+	}
+
+	action build_node_index {
+		nodes <- list<point>(path_network.vertices);
+		node_idx <- [];
+		loop i from: 0 to: length(nodes) - 1 { node_idx[nodes[i]] <- i; }
+		nadj <- [];
+		nlen <- [];
+		loop i from: 0 to: length(nodes) - 1 {
+			list<int> nb <- [];
+			list<float> ln <- [];
+			if nodes[i] in edge_geom.keys {
+				map<point, list<point>> m <- edge_geom[nodes[i]];
+				loop z over: m.keys {
+					if z in node_idx.keys {
+						nb <+ node_idx[z];
+						ln <+ polyline_length(m[z]);
+					}
+				}
+			}
+			nadj <+ nb;
+			nlen <+ ln;
+		}
+	}
+
+	// Dijkstra z wielu źródeł po długościach krawędzi (jak _next_hop_to w porcie): dla każdego węzła sąsiad
+	// bliżej najbliższego celu, -1 = brak (cel sam albo nieosiągalny). skip: krawędzie "a|b" pomijane.
+	list<int> next_hop_to(list<int> targets, map<string, bool> skip) {
+		int n <- length(nodes);
+		list<float> dist <- list_with(n, -1.0);
+		list<int> hop <- list_with(n, -1);
+		list<float> hd <- [];                   // kopiec binarny: odległości
+		list<int> hv <- [];                     // kopiec binarny: węzły
+		loop t over: targets {
+			dist[t] <- 0.0;
+			hd <+ 0.0; hv <+ t;
+		}
+		loop while: !empty(hd) {
+			// zdejmij minimum
+			float dv <- hd[0];
+			int v <- hv[0];
+			int last_i <- length(hd) - 1;
+			hd[0] <- hd[last_i]; hv[0] <- hv[last_i];
+			remove index: last_i from: hd;
+			remove index: last_i from: hv;
+			int i <- 0;
+			bool sifting <- true;
+			loop while: sifting {
+				int l <- 2 * i + 1;
+				int r <- l + 1;
+				int m <- i;
+				if l < length(hd) and hd[l] < hd[m] { m <- l; }
+				if r < length(hd) and hd[r] < hd[m] { m <- r; }
+				if m = i { sifting <- false; } else {
+					float td <- hd[i]; hd[i] <- hd[m]; hd[m] <- td;
+					int tv <- hv[i]; hv[i] <- hv[m]; hv[m] <- tv;
+					i <- m;
+				}
+			}
+			if dv <= dist[v] {
+				list<int> nb <- nadj[v];
+				list<float> ln <- nlen[v];
+				loop k from: 0 to: length(nb) - 1 {
+					if empty(nb) { break; }
+					int u <- nb[k];
+					if empty(skip) or !((string(v) + "|" + string(u)) in skip.keys) {
+						float du <- dv + ln[k];
+						if dist[u] < 0 or du < dist[u] {
+							dist[u] <- du;
+							hop[u] <- v;
+							// wstaw do kopca
+							hd <+ du; hv <+ u;
+							int j <- length(hd) - 1;
+							loop while: j > 0 and hd[(j - 1) div 2] > hd[j] {
+								int pj <- (j - 1) div 2;
+								float td <- hd[pj]; hd[pj] <- hd[j]; hd[j] <- td;
+								int tv <- hv[pj]; hv[pj] <- hv[j]; hv[j] <- tv;
+								j <- pj;
+							}
+						}
+					}
+				}
+			}
+		}
+		return hop;
+	}
+
+	// count węzłów (jak _place_nodes w porcie): random, dispersed (najdalszy punkt), central, peripheral
+	list<int> place_nodes(int count, string placement) {
+		list<int> comp <- (network_cleanup ? placement_vertices : nodes) collect node_idx[each];
+		comp <- comp where (!empty(nadj[each]));
+		float cx <- mean(comp collect nodes[each].x);
+		float cy <- mean(comp collect nodes[each].y);
+		map<int, float> r <- [];
+		loop v over: comp { r[v] <- sqrt((nodes[v].x - cx) ^ 2 + (nodes[v].y - cy) ^ 2); }
+		float rmax <- max(r.values);
+		if rmax <= 0 { rmax <- 1.0; }
+		list<int> pool <- placement = "central" ? (comp where (r[each] <= 0.35 * rmax))
+			: (placement = "peripheral" ? (comp where (r[each] >= 0.75 * rmax)) : comp);
+		int k <- max(1, min(count, length(pool)));
+		list<int> zones <- [];
+		if placement = "random" {
+			zones <- k among pool;
+		} else {
+			zones <- [one_of(pool)];
+			map<int, float> d <- [];
+			loop v over: pool { d[v] <- nodes[v] distance_to nodes[zones[0]]; }
+			loop while: length(zones) < k {
+				int nxt <- pool with_max_of (d[each]);
+				zones <+ nxt;
+				loop v over: pool { d[v] <- min(d[v], nodes[v] distance_to nodes[nxt]); }
+			}
+		}
+		return zones;
+	}
+
+	// punkty z pliku (SHP/GeoJSON w układzie sieci) -> najbliższe węzły, bez powtórzeń (jak _rest_zones_from_file)
+	list<int> nodes_from_file(string fpath) {
+		list<int> res <- [];
+		list<point> pool <- network_cleanup ? placement_vertices : nodes;
+		loop g over: file(fpath).contents {
+			point c <- geometry(g).location;
+			int v <- node_idx[pool closest_to c];
+			if !(v in res) { res <+ v; }
+		}
+		if empty(res) { error "Plik " + fpath + " nie zawiera żadnego punktu."; }
+		return res;
+	}
+
+	action setup_rest_zones {
+		if !(rest_zone_placement in ["dispersed", "central", "peripheral", "random"]) {
+			error "rest_zone_placement: dispersed / central / peripheral / random, nie " + rest_zone_placement;
+		}
+		if !real_env or well_mixed {
+			write "Moduł 4 (strefy odpoczynku) działa tylko na sieci - pominięty.";
+		} else {
+			rest_zones <- rest_zone_file != "" ? nodes_from_file(rest_zone_file)
+				: place_nodes(rest_zone_count, rest_zone_placement);
+			rest_hop <- next_hop_to(rest_zones, map<string, bool>([]));
+			rest_active <- true;
+			ask player {
+				frail <- flip(frail_share);
+				float mu <- frail ? fatigue_frail_mean : fatigue_regular_mean;
+				float sd <- frail ? fatigue_frail_sd : fatigue_regular_sd;
+				fatigue <- max(0.005, gauss(mu, sd)) / 100.0;     // na metr
+				energy <- rnd(rest_threshold, 1.0);                // różny stan na starcie
+			}
+		}
+	}
+
+	action setup_bank {
+		if !(bank_present_share > 0 and bank_present_share <= 1) { error "bank_present_share musi być w (0, 1]: " + bank_present_share; }
+		if bank_mean_stay < 1 { error "bank_mean_stay musi być >= 1: " + bank_mean_stay; }
+		if kin_on { error "Moduł 5 (bank) nie jest jeszcze łączony z Modułem 3 (kin_on)."; }
+		bank_active <- true;
+		if real_env and !well_mixed {
+			bank_nodes <- (network_cleanup ? placement_vertices : nodes) where (!empty(nadj[node_idx[each]]));
+		}
+		int k <- round(bank_present_share * length(player));
+		list<player> present <- k among list(player);
+		ask player {
+			if self in present { visit_no <- 1; } else { do bank_leave(); }
+		}
+	}
+
+	// Moduł 5: w parku odejście z p = 1/stay; w banku powrót z p dobranym tak, by w stanie ustalonym
+	// w parku był udział bank_present_share puli (jak _reflex_visitor_bank w porcie)
+	action visitor_bank_step {
+		float q_leave <- 1.0 / bank_mean_stay;
+		float sh <- bank_present_share;
+		float q_return <- sh >= 1.0 ? 1.0 : min(1.0, q_leave * sh / (1.0 - sh));
+		if dest_active and exit_walk_n > 0 and sh < 1.0 {
+			q_return <- min(1.0, sh / ((1.0 - sh) * (bank_mean_stay + exit_walk_sum / exit_walk_n)));
+		}
+		ask player {
+			if in_park {
+				if dest_active {
+					if !through and !wants_exit and sh < 1.0 and flip(q_leave) {
+						wants_exit <- true; dwell_left <- 0; exit_start <- cycle;
+						goal <- -1; goal_kind <- "exit";
+					}
+				} else if sh < 1.0 and flip(q_leave) {
+					do bank_leave();
+				}
+			} else if flip(q_return) {
+				do bank_enter();
+			}
+		}
+		bank_present_sum <- bank_present_sum + (player count each.in_park);
+		bank_samples <- bank_samples + 1;
+	}
+
+	list<string> bank_metrics {
+		if !bank_active { return ["n/a", "n/a", "n/a"]; }
+		int n <- max(1, length(player));
+		return [string(bank_present_sum / max(1, bank_samples * n)), string(sum(player collect each.visit_no) / n),
+			string(bank_cross_visit / max(1, bank_games))];
+	}
+
+	// komórka siatki dla punktu, jak cell_at w porcie: punkt na prawej/dolnej krawędzi świata należy do
+	// ostatniej komórki (environment_cell(p) dawało tam nil i "ask on a nil agent" w game.init)
+	environment_cell cell_at(point pt) {
+		if pt = nil or pt.x < 0 or pt.y < 0 or pt.x > shape.width or pt.y > shape.height { return nil; }
+		int col <- shape.width > 0 ? min(int(pt.x / shape.width * grid_cols), grid_cols - 1) : 0;
+		int row <- shape.height > 0 ? min(int(pt.y / shape.height * grid_rows), grid_rows - 1) : 0;
+		return environment_cell[col, row];
+	}
+
+	action setup_destinations {
+		if !real_env or well_mixed {
+			write "Moduł 6 (wejścia i cele) działa tylko na sieci - pominięty.";
+			return;
+		}
+		if dest_dwell < 1 or dest_per_visit < 1 { error "dest_dwell i dest_per_visit muszą być >= 1: " + dest_dwell + ", " + dest_per_visit; }
+		if !(dest_placement in ["dispersed", "central", "peripheral", "random"]) {
+			error "dest_placement: dispersed / central / peripheral / random, nie " + dest_placement;
+		}
+		if dest_share < 0 or dest_share > 1 { error "dest_share musi być w [0, 1]: " + dest_share; }
+		dests <- dest_file != "" ? nodes_from_file(dest_file) : place_nodes(dest_count, dest_placement);
+		entrances <- find_entrances();
+		if through_share < 0 or through_share > 1 { error "through_share musi być w [0, 1]: " + through_share; }
+		if bypass_on { do add_bypass(); }
+		loop d over: dests { dest_hops[d] <- next_hop_to([d], outside); }
+		exit_hops <- next_hop_to(entrances, outside);
+		dest_active <- true;
+		if through_share > 0 {
+			if length(entrances) < 2 { error "Przechodzący wymagają co najmniej dwóch wejść."; }
+			ask player { through <- flip(through_share); }
+			do compute_opposite();
+			loop e over: entrances { through_hops[e] <- next_hop_to([e], map<string, bool>([])); }
+			through_active <- true;
+		}
+		if dest_share < 1.0 {
+			ask player { purposeful <- flip(dest_share); }
+		}
+		ask player where each.in_park { do dest_start_trip(); }
+	}
+
+	// wejścia (jak _entrances w porcie)
+	list<int> find_entrances {
+		list<int> comp <- ((network_cleanup ? placement_vertices : nodes) collect node_idx[each]) where (!empty(nadj[each]));
+		if entrance_file = "" {
+			float cx <- mean(comp collect nodes[each].x);
+			float cy <- mean(comp collect nodes[each].y);
+			map<int, float> r <- [];
+			loop v over: comp { r[v] <- sqrt((nodes[v].x - cx) ^ 2 + (nodes[v].y - cy) ^ 2); }
+			float rmax <- max(r.values);
+			if rmax <= 0 { rmax <- 1.0; }
+			list<int> ent <- comp where (length(nadj[each]) = 1 and r[each] >= 0.75 * rmax);
+			return empty(ent) ? place_nodes(8, "peripheral") : ent;
+		}
+		list<point> pts <- [];
+		list<geometry> rings <- [];
+		loop g over: file(entrance_file).contents {
+			geometry gg <- geometry(g);
+			if gg.attributes["layer"] in ["roads", "obstacles", "bypass"] { continue; }
+			if length(gg.points) = 1 {
+				pts <+ gg.location;
+			} else if gg.area > 0 {
+				rings <+ gg;
+			}
+		}
+		list<int> ent <- [];
+		list<point> pool <- network_cleanup ? placement_vertices : nodes;
+		if !empty(pts) {
+			loop pt over: pts {
+				int v <- node_idx[pool closest_to pt];
+				if !(v in ent) { ent <+ v; }
+			}
+		} else if !empty(rings) {
+			map<int, bool> inside <- [];
+			map<int, bool> near <- [];
+			loop v over: comp {
+				inside[v] <- !empty(rings where (each covers nodes[v]));
+				near[v] <- min(rings collect (nodes[v] distance_to each.contour)) <= entrance_dist;
+			}
+			loop v over: comp {
+				if inside[v] {
+					bool crossing <- !empty(nadj[v] where ((each in inside.keys) and !inside[each]));
+					bool dead_end <- length(nadj[v]) = 1 and near[v];
+					if crossing or dead_end { ent <+ v; }
+				}
+			}
+			if empty(ent) { ent <- comp where near[each]; }
+		}
+		if empty(ent) { error "Plik wejść " + entrance_file + " nie daje żadnego wejścia."; }
+		return ent;
+	}
+
+	// obejście: linie z bypass_file dołączone jako krawędzie między wejściami, bez nowych węzłów (jak _add_bypass)
+	action add_bypass {
+		if bypass_file = "" { error "bypass_on wymaga bypass_file (linie obejścia)."; }
+		list<point> pool <- network_cleanup ? placement_vertices : nodes;
+		int added <- 0;
+		loop g over: file(bypass_file).contents {
+			list<point> pl <- geometry(g).points;
+			if length(pl) < 2 { continue; }
+			point pa <- pool closest_to first(pl);
+			point pb <- pool closest_to last(pl);
+			if (pa distance_to first(pl)) > 0.5 or (pb distance_to last(pl)) > 0.5 {
+				error "bypass_on: koniec obejścia nie trafia w węzeł sieci (wejście).";
+			}
+			int a <- node_idx[pa];
+			int z <- node_idx[pb];
+			if a = z or (z in nadj[a]) { continue; }
+			list<point> line_pts <- [pa] + copy_between(pl, 1, length(pl) - 1) + [pb];
+			float len <- polyline_length(line_pts);
+			do put_edge(pa, pb, line_pts, len);
+			do put_edge(pb, pa, reverse(line_pts), len);
+			nadj[a] <- nadj[a] + z; nlen[a] <- nlen[a] + len;
+			nadj[z] <- nadj[z] + a; nlen[z] <- nlen[z] + len;
+			outside[string(a) + "|" + string(z)] <- true;
+			outside[string(z) + "|" + string(a)] <- true;
+			added <- added + 1;
+		}
+		if added = 0 and empty(outside) { error "bypass_on: brak linii obejścia w " + bypass_file; }
+		bypass_active <- true;
+	}
+
+	// wejście -> przeciwległe: kierunek od środka parku najbliższy odwrotnemu (remis: dalsze) (jak _opposite_entrances)
+	action compute_opposite {
+		list<point> comp_pts <- placement_vertices;
+		float cx <- mean(comp_pts collect each.x);
+		float cy <- mean(comp_pts collect each.y);
+		map<int, float> ang <- [];
+		loop e over: entrances { ang[e] <- atan2(nodes[e].y - cy, nodes[e].x - cx) * #pi / 180; }
+		loop e over: entrances {
+			int best <- -1;
+			float best_d <- 0.0;
+			float best_dist <- 0.0;
+			loop f over: entrances {
+				if f != e {
+					float d <- abs(((ang[f] - ang[e]) mod (2 * #pi) + 2 * #pi) mod (2 * #pi) - #pi);
+					d <- round(d * 1e6) / 1e6;
+					float dd <- nodes[e] distance_to nodes[f];
+					if best < 0 or d < best_d or (d = best_d and dd > best_dist) {
+						best <- f; best_d <- d; best_dist <- dd;
+					}
+				}
+			}
+			opposite[e] <- best;
+		}
+	}
+
+	int dest_next_hop(string kind, int gl, int nd) {
+		if kind = "through" { return through_hops[gl][nd]; }
+		if kind = "exit" { return exit_hops[nd]; }
+		return dest_hops[gl][nd];
+	}
+
+	list<string> dest_metrics {
+		if !dest_active { return ["n/a", "n/a", "n/a"]; }
+		int n <- max(1, length(player));
+		return [string(sum(player collect each.dwell_cycles) / max(1, n * cycle)), string(dest_arrivals / n), string(dest_exits / n)];
+	}
+
+	list<string> through_metrics {
+		if !through_active { return ["n/a", "n/a"]; }
+		return [string(through_trips / max(1, length(player))),
+			through_trips > 0 ? string(through_bypass_trips / through_trips) : "n/a"];
+	}
+
+	// odległości sieciowe z węzła v do węzłów najwyżej radius (Dijkstra z odcięciem, zapamiętane; jak _dist_from)
+	map<int, float> dist_from(int v, float radius) {
+		if v in net_dist_cache.keys { return net_dist_cache[v]; }
+		map<int, float> d <- [v::0.0];
+		list<int> open <- [v];
+		loop while: !empty(open) {
+			int u <- open with_min_of (d[each]);
+			open <- open - u;
+			float du <- d[u];
+			list<int> nb <- nadj[u];
+			list<float> ln <- nlen[u];
+			loop k from: 0 to: length(nb) - 1 {
+				if empty(nb) { break; }
+				int w <- nb[k];
+				float dw <- du + ln[k];
+				if dw <= radius and (!(w in d.keys) or dw < d[w]) {
+					d[w] <- dw;
+					if !(w in open) { open <+ w; }
+				}
+			}
+		}
+		net_dist_cache[v] <- d;
+		return d;
+	}
+
+	// odległość po sieci między położeniami [a, da, b, db] (jak network_distance w porcie; 1e9 = poza promieniem)
+	float network_distance(list<float> pa, list<float> pb, float radius) {
+		int a1 <- int(pa[0]); int a2 <- int(pa[2]);
+		int b1 <- int(pb[0]); int b2 <- int(pb[2]);
+		float best <- 1.0e9;
+		if a1 != a2 and ((a1 = b1 and a2 = b2) or (a1 = b2 and a2 = b1)) {     // ta sama krawędź
+			float pos_a <- a1 = b1 ? pa[1] : pa[3];
+			best <- abs(pos_a - pb[1]);
+		}
+		loop ia over: [0, 2] {
+			int u <- int(pa[ia]);
+			float du <- pa[ia + 1];
+			if du <= radius {
+				map<int, float> dist_u <- dist_from(u, radius);
+				loop ib over: [0, 2] {
+					int w <- int(pb[ib]);
+					if w in dist_u.keys { best <- min(best, du + dist_u[w] + pb[ib + 1]); }
+				}
+			}
+		}
+		return best <= radius + 1.0e-9 ? best : 1.0e9;
+	}
+
+	// metryki modułu 4 (jak rest_metrics w porcie)
+	list<string> rest_metrics {
+		if !rest_active { return ["n/a", "n/a", "n/a", "n/a"]; }
+		int n <- max(1, length(player));
+		return [string(sum(player collect each.rest_cycles) / max(1, cycle * n)), string(rest_games / max(1, nb_game)),
+			string(rest_bouts / n), string((player count each.frail) / n)];
+	}
+
+	action put_edge(point a, point z, list<point> pts, float len) {
+		map<point, list<point>> m <- (a in edge_geom.keys) ? edge_geom[a] : map<point, list<point>>([]);
+		if !(z in m.keys) or polyline_length(m[z]) > len {
+			m[z] <- pts;
+		}
+		edge_geom[a] <- m;
+	}
+
+	float polyline_length(list<point> pts) {
+		float total <- 0.0;
+		loop i from: 0 to: length(pts) - 2 {
+			total <- total + sqrt((pts[i + 1].x - pts[i].x) ^ 2 + (pts[i + 1].y - pts[i].y) ^ 2);
+		}
+		return total;
 	}
 
 	// usuwa krawędzie w losowej kolejności, tylko takie, które nie zwiększają liczby składowych
@@ -562,6 +1085,15 @@ global {
 	action on_game_played(game g) {
 		ask g.p1 { do record_encounter(g.p2, g.knew1_rem, g.knew1_ever, g.cell1); }
 		ask g.p2 { do record_encounter(g.p1, g.knew2_rem, g.knew2_ever, g.cell2); }
+		if bank_active {
+			loop pr over: [[g.p1, g.p2], [g.p2, g.p1]] {
+				player a <- player(pr[0]);
+				player bb <- player(pr[1]);
+				if !(bb in a.first_met_visit.keys) { a.first_met_visit[bb] <- a.visit_no; }
+				bank_games <- bank_games + 1;
+				if a.first_met_visit[bb] < a.visit_no { bank_cross_visit <- bank_cross_visit + 1; }
+			}
+		}
 	}
 
 	reflex export_encounter_cells when: encounter_export and cycle = end_cycle {
@@ -732,6 +1264,15 @@ global {
 		bool fixated <- !empty(classic_characters where (world.share_of(each) >= 1.0));
 		float alld_trend <- alld_trend_10k();
 		bool stabilized <- abs(alld_trend) < stab_trend_eps;
+		// moduły 4–6: kolumny 75–101 jak w porcie (dopisane na końcu)
+		list<string> m456 <- [string(rest_on),
+			rest_on ? (rest_zone_file != "" ? string(length(rest_zones)) : string(rest_zone_count)) : "n/a",
+			rest_on ? (rest_zone_file != "" ? "file" : rest_zone_placement) : "n/a"] + rest_metrics()
+			+ [string(bank_on), bank_on ? string(bank_present_share) : "n/a", bank_on ? string(bank_mean_stay) : "n/a"]
+			+ bank_metrics() + [movement_mode, partner_distance]
+			+ (dest_active ? [string(length(dests)), string(length(entrances)), string(dest_dwell), string(dest_per_visit),
+				string(dest_share)] : ["n/a", "n/a", "n/a", "n/a", "n/a"])
+			+ dest_metrics() + [string(bypass_on), string(through_share)] + through_metrics();
 		save [variant_name, prediction, seed, compat_N, well_mixed, payoff_preset, payoff_T, payoff_R, payoff_P, payoff_S,
 			evolution_on, mutation_rate, fermi_k, evolution_interval, dunbar_limit, vision_radius, player_speed, end_cycle,
 			share_TFT, share_ALLC, share_ALLD, share_FTFT, share_TF2T, share_GRIM, share_WSLS, d_share,
@@ -758,7 +1299,8 @@ global {
 			kin_on and r_hat(kin_all) != -999.0 ? string(r_hat(kin_all)) : "n/a",
 			kin_on ? string(p4_intervals) : "n/a",
 			kin_on and p4_intervals > 0 ? string(p4_agree / p4_intervals) : "n/a",
-			kin_on ? kin_matching_mode : "n/a"]
+			kin_on ? kin_matching_mode : "n/a",
+			m456[0], m456[1], m456[2], m456[3], m456[4], m456[5], m456[6], m456[7], m456[8], m456[9], m456[10], m456[11], m456[12], m456[13], m456[14], m456[15], m456[16], m456[17], m456[18], m456[19], m456[20], m456[21], m456[22], m456[23], m456[24], m456[25], m456[26]]
 			to: "../results/compat_results.csv" rewrite: false format: "csv" header: true;
 	}
 
@@ -899,7 +1441,8 @@ global {
 			return 0.0;
 		}
 		list<float> dists <- [];
-		loop i from: 0 to: length(aq) - 1 {
+		// i do length - 2: w GAML pętla "from: 6 to: 5" idzie w dół, więc j = i + 1 > length - 1 wychodziło poza listę
+		loop i from: 0 to: length(aq) - 2 {
 			loop j from: i + 1 to: length(aq) - 1 {
 				dists <+ (aq[i].location distance_to aq[j].location);
 			}
@@ -1017,8 +1560,20 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 			}
 		}
 		if kin_on { do setup_families(); }
+		if rest_on { do setup_rest_zones(); }
+		if bank_on {
+			do setup_bank();
+			create bank_keeper;
+		}
+		if movement_mode = "destinations" {
+			do setup_destinations();
+		} else if !(movement_mode in ["default", "schelling"]) {
+			error "movement_mode: default / destinations / schelling, nie " + movement_mode;
+		}
+		if !(partner_distance in ["euclid", "network"]) { error "partner_distance: euclid / network, nie " + partner_distance; }
 	}
 }
+
 
 species park_boundary {
 	aspect default {
@@ -1140,8 +1695,8 @@ species game{
 		float fb_p1 <- world.feedback_value(p1_move, p2_move);
 		float fb_p2 <- world.feedback_value(p2_move, p1_move);
 
-		environment_cell cell_p1 <- environment_cell(p1.location);
-		environment_cell cell_p2 <- environment_cell(p2.location);
+		environment_cell cell_p1 <- world.cell_at(p1.location);
+		environment_cell cell_p2 <- world.cell_at(p2.location);
 		cell1 <- cell_p1;
 		cell2 <- cell_p2;
 
@@ -1187,8 +1742,8 @@ species game{
 
 		float bump <- world.disorder_bump_for(p1_move, p2_move);
 		if bump > 0 {
-		    ask cell_p1 { disorder <- disorder_clamp ? min(1.0, disorder + bump) : disorder + bump; }
-		    if cell_p2 != cell_p1 {
+		    if cell_p1 != nil { ask cell_p1 { disorder <- disorder_clamp ? min(1.0, disorder + bump) : disorder + bump; } }
+		    if cell_p2 != nil and cell_p2 != cell_p1 {
 		        ask cell_p2 { disorder <- disorder_clamp ? min(1.0, disorder + bump) : disorder + bump; }
 		    }
 		}
@@ -1280,6 +1835,13 @@ species game{
 	}
 }
 
+// Moduł 5: rotacja odwiedzających po grach, przed graczami (kolejność jak Model.step w porcie)
+species bank_keeper {
+	reflex rotate {
+		ask world { do visitor_bank_step(); }
+	}
+}
+
 species player skills: [moving] {
 
 	int height <- 0;
@@ -1307,6 +1869,156 @@ species player skills: [moving] {
 
 	point current_node;
 	point target_node;
+	list<point> path_pts <- [];              // polilinia bieżącej krawędzi (od węzła startowego)
+	float path_pos <- 0.0;                   // przebyta długość na tej krawędzi
+	// Moduł 4: energia i zmęczenie (bez wpływu na nic przy rest_on = false)
+	float energy <- 1.0;
+	float fatigue <- 0.0;                    // utrata energii na metr
+	bool frail <- false;
+	bool resting <- false;
+	int rest_cycles <- 0;
+	bool in_park <- true;                    // Moduł 5
+	int visit_no <- 0;
+	map<player, int> first_met_visit;        // partner -> numer mojej wizyty, w której go poznałem
+	// Moduł 6 (stan potrzebny też bankowi)
+	int goal <- -1;                          // węzeł celu albo wejścia (-1 = brak)
+	string goal_kind <- "";                  // "dest" | "exit" | "through" | ""
+	int dwell_left <- 0;
+	int dests_left <- 0;
+	bool wants_exit <- false;
+	bool purposeful <- true;
+	bool through <- false;
+	bool used_bypass <- false;
+	int exit_start <- 0;
+	int dwell_cycles <- 0;
+	point prev_node;
+
+	// położenie na sieci [węzeł a, odl. od a, węzeł b, odl. od b] (jak _net_pos w porcie)
+	list<float> net_pos {
+		if !empty(path_pts) and prev_node != nil and target_node != nil and prev_node != target_node {
+			float L <- world.polyline_length(path_pts);
+			float d <- min(path_pos, L);
+			return [float(node_idx[prev_node]), d, float(node_idx[target_node]), L - d];
+		}
+		return [float(node_idx[current_node]), 0.0, float(node_idx[current_node]), 0.0];
+	}
+
+	action bank_leave {
+		in_park <- false;
+		resting <- false;
+		wants_exit <- false; dwell_left <- 0; goal <- -1; goal_kind <- "";
+		target_node <- nil;
+		path_pts <- [];
+		path_pos <- 0.0;
+	}
+
+	action bank_enter {
+		in_park <- true;
+		visit_no <- visit_no + 1;
+		bank_entries <- bank_entries + 1;
+		if dest_active {
+			do dest_enter();
+		} else if !empty(bank_nodes) {
+			point v <- one_of(bank_nodes);
+			current_node <- v;
+			location <- v;
+		}
+		if rest_active { energy <- rnd(rest_threshold, 1.0); }
+	}
+
+	action dest_enter {
+		int v <- one_of(entrances);
+		current_node <- nodes[v];
+		prev_node <- nil;
+		location <- nodes[v];
+		target_node <- nil;
+		path_pts <- [];
+		path_pos <- 0.0;
+		do dest_start_trip();
+	}
+
+	// nowa wizyta: liczba celów z rozkładu geometrycznego (średnia dest_per_visit, min. 1)
+	action dest_start_trip {
+		dwell_left <- 0;
+		wants_exit <- false;
+		int cur <- node_idx[current_node];
+		if through {
+			dests_left <- 0;
+			used_bypass <- false;
+			goal_kind <- "through";
+			goal <- (cur in opposite.keys) ? opposite[cur] : -1;
+			if goal < 0 { goal <- one_of(entrances - cur); }   // start poza wejściem (pierwsza wizyta)
+			return;
+		}
+		if !purposeful {
+			goal <- -1; goal_kind <- "";
+			dests_left <- 0;
+			return;
+		}
+		int k <- 1;
+		loop while: rnd(1.0) > 1.0 / dest_per_visit { k <- k + 1; }
+		dests_left <- k;
+		dwell_left <- 0;
+		wants_exit <- false;
+		do dest_next_goal();
+	}
+
+	// kolejny cel (losowy, osiągalny, inny niż bieżący węzeł) albo wyjście
+	action dest_next_goal {
+		int cur <- node_idx[current_node];
+		list<int> cands <- dests where (each != cur and dest_hops[each][cur] >= 0);
+		if wants_exit or dests_left <= 0 or empty(cands) {
+			goal <- -1; goal_kind <- "exit";
+		} else {
+			goal <- one_of(cands); goal_kind <- "dest";
+		}
+	}
+
+	bool dest_at_goal {
+		int cur <- node_idx[current_node];
+		if goal_kind = "exit" { return cur in entrances; }
+		return cur = goal;
+	}
+
+	// w celu: pobyt z rozkładu wykładniczego; w wyjściu: z bankiem - wyjście z parku, bez banku - powrót
+	// losowym wejściem z nową wizytą; przechodzący po dojściu wychodzi (jak dest_arrived)
+	action dest_arrived {
+		if goal_kind = "through" {
+			through_trips <- through_trips + 1;
+			if used_bypass { through_bypass_trips <- through_bypass_trips + 1; }
+			if bank_active { do bank_leave(); } else { do dest_enter(); }
+			return;
+		}
+		if goal_kind = "dest" {
+			dest_arrivals <- dest_arrivals + 1;
+			dests_left <- dests_left - 1;
+			dwell_left <- max(1, round(exp_rnd(1.0 / dest_dwell)));
+			return;
+		}
+		dest_exits <- dest_exits + 1;
+		if bank_active and wants_exit {
+			exit_walk_sum <- exit_walk_sum + cycle - exit_start;
+			exit_walk_n <- exit_walk_n + 1;
+			do bank_leave();
+			return;
+		}
+		do dest_enter();
+	}
+
+	// Moduł 6: true = agent stoi w celu w tym cyklu (gra z sąsiadami, nie idzie dalej)
+	bool destination_step {
+		if dwell_left > 0 {
+			dwell_left <- dwell_left - 1;
+			dwell_cycles <- dwell_cycles + 1;
+			if dwell_left = 0 { do dest_next_goal(); }
+			return true;
+		}
+		if goal_kind != "" and dest_at_goal() and (target_node = nil or at_target) {
+			do dest_arrived();
+			return dwell_left > 0;
+		}
+		return false;
+	}
 	float move_speed <- 2.0;
 	float sensitivity <- 2.0;
 
@@ -1347,6 +2059,7 @@ species player skills: [moving] {
 			if !empty(rel) { return one_of(rel); }
 		}
 		list<player> pool <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
+		if bank_active { pool <- pool where each.in_park; }
 		return empty(pool) ? nil : one_of(pool);
 	}
 
@@ -1398,7 +2111,7 @@ species player skills: [moving] {
 	    } else {
 	        base_state <- last(my_moves_per_other[p]) + "|" + last(lists_per_other[p]);
 	    }
-	    environment_cell here <- environment_cell(location);
+	    environment_cell here <- world.cell_at(location);
 	    bool risky <- (here != nil)
 	        and (here in betrayal_count_at_location.keys)
 	        and (betrayal_count_at_location[here] >= generalization_threshold);
@@ -1419,7 +2132,7 @@ species player skills: [moving] {
 	float effective_anchor_strength(player p) {
 		int n <- length(lists_per_other[p]);
 		float base <- character_strength * exp(-anchor_decay_rate * n);
-		environment_cell here <- environment_cell(location);
+		environment_cell here <- world.cell_at(location);
 		float erosion <- (here != nil) ? (1 - broken_windows_sensitivity * here.disorder) : 1.0;
 		erosion <- max(0.0, erosion);
 		return max(0.0, min(1.0, base * erosion));
@@ -1435,13 +2148,21 @@ species player skills: [moving] {
 		if movement_mode = "schelling" {
 			error "movement_mode = schelling: do implementacji w Fazie 5.";
 		}
+		if dest_active and goal_kind != "" {
+			int hop <- world.dest_next_hop(goal_kind, goal, node_idx[current_node]);
+			if hop >= 0 and nodes[hop] in candidates { return nodes[hop]; }   // najkrótsza droga do celu albo wyjścia
+		}
+		if rest_active and energy < rest_threshold {
+			int hop <- rest_hop[node_idx[current_node]];
+			if hop >= 0 and nodes[hop] in candidates { return nodes[hop]; }   // najkrótsza droga do najbliższej strefy
+		}
 		return weighted_next_node(candidates);
 	}
 
 	point weighted_next_node(list<point> candidates) {
 		map<point, float> weights <- map<point, float>([]);
 		loop c over: candidates {
-			environment_cell cell <- environment_cell(c);
+			environment_cell cell <- world.cell_at(c);
 			float fb <- (cell != nil and cell in personal_feedback.keys) ? personal_feedback[cell] : 0.0;
 			float social <- social_sensitivity > 0 ? social_score(c) : 0.0;
 			weights[c] <- exp(sensitivity * fb + social_sensitivity * social);
@@ -1449,27 +2170,110 @@ species player skills: [moving] {
 		return rnd_choice(weights);
 	}
 
-	reflex choose_target when: real_env and !well_mixed and (target_node = nil or location = target_node) {
-		list<point> neighbors <- list(path_network neighbors_of current_node);
+	bool at_target -> target_node != nil and location = target_node;
+
+	// krok gracza w kolejności Player.step portu; przy wyłączonych modułach te same akcje i ta sama
+	// kolejność co dawne osobne refleksy (choose_target, move_on_network, wander, height_decay, play)
+	reflex step_player when: in_park {
+		bool stop <- false;
+		if dest_active and destination_step() {
+			if unlimited_games or height = 0 { do try_play(); }
+			stop <- true;
+		}
+		if !stop and !in_park { stop <- true; }      // wyszedł wyjściem w tym cyklu
+		if !stop and rest_active and rest_step() {
+			if unlimited_games or height = 0 { do try_play(); }
+			stop <- true;
+		}
+		if !stop {
+			if rest_active and target_node != nil and !at_target {
+				energy <- max(0.0, energy - fatigue * move_speed);
+			}
+			if real_env and !well_mixed and (target_node = nil or location = target_node) { do choose_target(); }
+			if real_env and !well_mixed and target_node != nil and location != target_node { do move_on_network(); }
+			if !real_env and !well_mixed { do wander(amplitude: 90.0); }
+			if !unlimited_games { do height_decay(); }
+			if unlimited_games or height = 0 { do try_play(); }
+		}
+	}
+
+	// Moduł 4: true = agent odpoczywa w tym cyklu (stoi i odzyskuje energię, ale gra z sąsiadami)
+	bool rest_step {
+		if resting {
+			energy <- min(rest_target, energy + rest_recovery);
+			rest_cycles <- rest_cycles + 1;
+			if energy >= rest_target { resting <- false; }
+			return resting;
+		}
+		if energy < rest_threshold and (node_idx[current_node] in rest_zones) and (target_node = nil or at_target) {
+			resting <- true;
+			rest_cycles <- rest_cycles + 1;
+			rest_bouts <- rest_bouts + 1;
+			return true;
+		}
+		return false;
+	}
+
+	action choose_target {
+		list<point> neighbors <- bypass_active ? (nadj[node_idx[current_node]] collect nodes[each])
+			: list(path_network neighbors_of current_node);
+		int cur <- bypass_active ? node_idx[current_node] : -1;
+		if bypass_active and !through {
+			list<point> inner <- neighbors where !((string(cur) + "|" + string(node_idx[each])) in outside.keys);
+			if !empty(inner) { neighbors <- inner; }
+		}
 		if empty(neighbors) {
 			target_node <- current_node;
+			path_pts <- [];
 		} else {
-			target_node <- choose_direction(neighbors);
+			point new_target <- choose_direction(neighbors);
+			if bypass_active and ((string(cur) + "|" + string(node_idx[new_target])) in outside.keys) { used_bypass <- true; }
+			prev_node <- current_node;
+			path_pts <- (current_node in edge_geom.keys and new_target in edge_geom[current_node].keys)
+				? edge_geom[current_node][new_target] : [current_node, new_target];
+			path_pos <- 0.0;
+			target_node <- new_target;
 			current_node <- target_node;
 		}
 	}
 
-	reflex move_on_network when: real_env and !well_mixed and target_node != nil and location != target_node {
-		do goto (target:target_node, on:path_network, speed:move_speed);
+	// jak reflex_move_on_network w porcie: move_speed wzdłuż polilinii krawędzi, bez przenoszenia
+	// reszty dystansu przez węzeł
+	action move_on_network {
+		if empty(path_pts) {
+			location <- target_node;
+		} else {
+			float pos <- path_pos + move_speed;
+			float acc <- 0.0;
+			bool done <- false;
+			int last_i <- length(path_pts) - 2;
+			int i <- 0;
+			loop while: !done and i <= last_i {
+				point p0 <- path_pts[i];
+				point p1 <- path_pts[i + 1];
+				float seg <- sqrt((p1.x - p0.x) ^ 2 + (p1.y - p0.y) ^ 2);
+				if acc + seg >= pos {
+					float t <- seg > 0 ? (pos - acc) / seg : 1.0;
+					location <- {p0.x + t * (p1.x - p0.x), p0.y + t * (p1.y - p0.y)};
+					path_pos <- pos;
+					if i = last_i and t >= 1.0 { location <- target_node; }
+					done <- true;
+				} else {
+					acc <- acc + seg;
+				}
+				i <- i + 1;
+			}
+			if !done {
+				location <- target_node;
+				path_pos <- acc;
+			}
+		}
 	}
 
-	reflex wander_fallback when: !real_env and !well_mixed {
-		do wander(amplitude:90.0);
-	}
 
 	// U7: wypłata przechodzi z height do score po 1 na cykl; resztka height z końca przebiegu nie trafia
 	// do score (mean_for lekko zaniżone). Eksperymenty zgodności używają unlimited_games = true.
-	reflex height_decay when: !unlimited_games {
+	action height_decay {
 		if height > 0 {
 			height <- height - 1;
 			score <- score + 1;
@@ -1651,7 +2455,7 @@ species player skills: [moving] {
 		else { error "Nieznany charakter: " + character; }
 
 		if base_move = "C" and broken_windows_sensitivity > 0 {
-		    environment_cell here <- environment_cell(location);
+		    environment_cell here <- world.cell_at(location);
 		    float local_disorder <- (here != nil) ? here.disorder : 0.0;
 		    if flip(min(0.9, broken_windows_sensitivity * local_disorder)) {
 		        base_move <- "D";
@@ -1765,7 +2569,7 @@ species player skills: [moving] {
 		string s <- get_state(p);
 		do ensure_q_state(p, s);
 
-		environment_cell here <- environment_cell(location);
+		environment_cell here <- world.cell_at(location);
 		float env_fb <- (here != nil and here in personal_feedback.keys) ? personal_feedback[here] : 0.0;
 
 		float adjusted_q_d <- q_d_per_other[p][s] - env_influence * env_fb;
@@ -1793,13 +2597,15 @@ species player skills: [moving] {
 		return action_chosen;
 	}
 
-	reflex do_you_wanna_play when: unlimited_games or height = 0 {
-		do try_play();
-	}
 
 	action try_play {
 		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
 		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
+		if bank_active { nearby <- nearby where each.in_park; }
+		if partner_distance = "network" and real_env and !well_mixed {
+			list<float> pm <- net_pos();
+			nearby <- nearby where (world.network_distance(pm, each.net_pos(), vision_radius) <= vision_radius);
+		}
 		// Moduł 3: w well_mixed z prawdopodobieństwem α partner spośród krewnych
 		if well_mixed and kin_on and kin_matching_prob > 0 and flip(kin_matching_prob) {
 			string my_char <- character;
@@ -1822,6 +2628,7 @@ species player skills: [moving] {
 					point pn2 <- enemy.location;
 
 					create game with: [p1::a, p2::b, location::(pn1 + pn2) / 2, pair_key::key] returns: new_games;
+					if rest_active and (resting or enemy.resting) { rest_games <- rest_games + 1; }
 
 					if pair_cooldown > 0 { world.active_pairs[key] <- first(new_games); }
 				}
