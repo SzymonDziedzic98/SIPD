@@ -12,6 +12,9 @@ Spatial iterated prisoner dillema
   potem `http://localhost:8000`, albo opublikuj katalog `web/` przez GitHub Pages.
   Interfejs jest po polsku i po angielsku: przełącznik PL/EN w nagłówku, wybór zapamiętuje przeglądarka;
   `?lang=en` albo `?lang=pl` w adresie wymusza język. Teksty angielskie są w `web/i18n.js`.
+  Powtórzenia, batch i „Wszystkie parki z biblioteki” liczą się w tle (`web/bg.js`, osobny Pyodide w Web Workerze), więc strona
+  nie przestaje reagować; `web/sw.js` zapisuje stronę i Pyodide w przeglądarce, więc kolejne otwarcie jest szybsze i działa bez internetu.
+  `?try=2.1` otwiera stronę od razu na wariancie 1 drugiego eksperymentu z „Co wypróbować”, `?try=2.reps` liczy oba warianty × 5 seedów.
 - Parki z OpenStreetMap jak w PD: „Wczytaj gotowy” bierze park z `web/parki/` (Staszica, Szczytnicki, Południowy,
   Grabiszyński, Zachodni; OSM, ODbL, pobrane 2026-09-28, już po poprawkach sieci), „Pobierz z OSM” pyta Overpass API.
   Poprawki sieci (łączenie kawałków do 50 m, ścieżek równoległych 3 m, skrzyżowań 6 m, ślepych końców 25 m) liczy

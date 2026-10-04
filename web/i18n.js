@@ -201,7 +201,19 @@ const I18N_EN = {
  "__title": "SIPD in the browser",
  "cykl": "cycle",
  "gier": "games",
- "sieć": "network"
+ "sieć": "network",
+ "Ustawienia": "Settings",
+ "Mapa ciepła: dwa zmieniane parametry": "Heat map: two varied parameters",
+ "Średnia wybranego wyniku w każdej kombinacji; kolor od najniższej (fioletowy) do najwyższej (żółty) wartości.": "Mean of the chosen output in each combination; colour from the lowest (purple) to the highest (yellow) value.",
+ "Wszystkie parki z biblioteki": "All parks in the library",
+ "Liczba seedów": "Number of seeds",
+ "20 na km ścieżki": "20 per km of path",
+ "z ustawień": "from the settings",
+ "Porównaj parki": "Compare parks",
+ "Wynik w parkach": "Output per park",
+ "Cykle": "Cycles",
+ "Liczba agentów": "Number of agents",
+ "Ustawienia z zakładki Symulacja na każdym parku z biblioteki, bez animacji, z seedami od 1 do podanej liczby. Przy „20 na km ścieżki” liczba agentów (compat_N) rośnie z długością ścieżek, jak w „Co wypróbować”; to działa przy włączonym rdzeniu zgodności (compat_core).": "The settings from the Simulation tab on every park in the library, without animation, with seeds from 1 to the given number. With “20 per km of path” the number of agents (compat_N) grows with path length, as in “Things to try”; this works when the compatibility core (compat_core) is on."
 };
 
 // kategorie i etykiety parametrów z sipd.GUI_PARAMETERS (po polsku w sipd.py)

@@ -2,7 +2,8 @@
 // przyciski wyboru pliku w języku strony, podpowiedzi na wyszarzonych przyciskach, napisy w pustych panelach, opisy parametrów,
 // zrozumiały komunikat, gdy Pyodide się nie wczyta, zapamiętywanie ustawień i link z ustawieniami, parametry podstawowe
 // i zaawansowane, suwaki, porównanie dwóch przebiegów, skróty klawiszowe, karty „Co wypróbować”, wersja modelu i config.json,
-// skala kolorów, zapis PNG, wykres pudełkowy, powtórzenia, samouczek, widok na telefon i galeria parków.
+// skala kolorów, zapis PNG, wykres pudełkowy, powtórzenia, samouczek, widok na telefon, galeria parków,
+// obliczenia w tle (bg.js), mapa ciepła, linki do eksperymentów, pamięć podręczna (sw.js) i dostępność.
 // Wymaga i18n.js (L, I18N). Nie dotyka modelu: czyta i ustawia tylko pola formularza.
 "use strict";
 const UX = (() => {
@@ -51,6 +52,7 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .png-btn { padding: 1px 8px; font-size: 11.5px; }
 .box-plot { display: grid; gap: 6px; }
 .box-plot canvas { width: 100%; height: 260px; display: block; }
+.box-plot canvas.heat { height: auto; }
 .rep-wrap { display: grid; gap: 6px; }
 .tour-mask { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
 .tour-hole { position: fixed; border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); outline: 2px solid var(--focus); transition: all .2s; z-index: 21; pointer-events: none; }
@@ -62,13 +64,19 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 .mobile-tabs button[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
 @media (max-width: 860px) {
   .mobile-tabs { display: flex; }
-  [data-mview="results"] > aside.params, [data-mview="params"] > main { display: none !important; }
+  [data-mview="results"] > aside.params, [data-mview="params"] > .results { display: none !important; }
 }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
 .gallery button { border: 1px solid var(--line); background: var(--ground); border-radius: 6px; padding: 4px; cursor: pointer; display: grid; gap: 2px; text-align: left; font-size: 11px; color: var(--muted); }
 .gallery button[aria-pressed="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
 .gallery img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: var(--map-bg, transparent); border-radius: 4px; }
 .gallery b { color: var(--ink); font-weight: 600; font-size: 11.5px; }
+select { background-color: var(--ground); border: 1px solid var(--line); border-radius: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip-link { position: absolute; left: 8px; top: -60px; z-index: 30; background: var(--ink); color: var(--ground); padding: 6px 12px; border-radius: 6px; text-decoration: none; }
+.skip-link:focus { top: 8px; }
+canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 .load-error .detail { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 `;
   document.head.append(style);
@@ -457,7 +465,9 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 
   // ---------- „Co wypróbować” ----------
   // Karty z eksperymentami: co sprawdzić, na co patrzeć, czego się spodziewać; przyciski wariantów uruchamia strona.
+  let tryItems = [];
   function tryCards(host, items, run, reps) {
+    tryItems = items;
     const render = () => {
       host.replaceChildren(...items.map((it) => {
         const c = document.createElement("article"); c.className = "try-card";
@@ -518,6 +528,7 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
     const x = document.createElement("button"); x.type = "button"; x.className = "btn small";
     x.textContent = L("Zamknij", "Close");
     x.addEventListener("click", () => tryBanner(el, null));
+    if (tryItems.includes(it)) ctr.append(linkButton(() => tryLink(tryItems.indexOf(it), i)));
     ctr.append(x);
     el.replaceChildren(p1, p2, ...extra, ctr);
   }
@@ -663,12 +674,29 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
     el.replaceChildren(t, p);
   }
 
+  // ---------- V: zestawienie grup (np. parków) ----------
+  // groups: [{ label, recs: [{miary}] }]; wiersz = grupa, kolumny = n, dodatkowe kolumny i średnia ± SD miar
+  function groupTable(el, groups, metrics, extra = []) {
+    const t = document.createElement("table"); t.className = "cmp-table";
+    const n = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+    const head = ["", "n", ...extra.map((x) => L(x.pl, x.en)), ...metrics.map((m) => L(m.pl, m.en))];
+    const tr0 = t.insertRow(); head.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    groups.forEach((g) => {
+      const tr = t.insertRow();
+      const cells = [g.label, String(g.recs.length), ...extra.map((x) => x.get(g)),
+        ...metrics.map((m) => { const a = g.recs.map((r) => r[m.key]).filter((v) => typeof v === "number"); return a.length ? n(mean(a)) + (a.length > 1 ? " ± " + n(sd(a)) : "") : "–"; })];
+      cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
+    });
+    el.replaceChildren(t);
+  }
+
   // ---------- H: samouczek ----------
   // steps: [{ el: () => element, text: [pl, en] }]; pokazywany raz (klucz w localStorage), potem z przycisku
   function tour(key, steps, force) {
     try { if (!force && localStorage.getItem(key)) return; } catch (e) { if (!force) return; }
     const hole = document.createElement("div"); hole.className = "tour-hole";
     const tip = document.createElement("div"); tip.className = "tour-tip"; tip.setAttribute("role", "dialog");
+    tip.setAttribute("aria-label", L("Samouczek", "Tutorial"));
     document.body.append(hole, tip);
     let i = 0;
     const end = () => { hole.remove(); tip.remove(); document.removeEventListener("keydown", onKey, true); window.removeEventListener("resize", show);
@@ -738,7 +766,230 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
     return { mark(name) { host.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.name === name))); } };
   }
 
+
+  // ---------- T: obliczenia w tle ----------
+  // cfg: { pyodide: adres katalogu Pyodide, files: async () => ({ ścieżka: tekst }), setup: kod Pythona, mainPy: () => py strony }
+  // run(code, vars, onEvent, files): code to wyrażenie Pythona zwracające generator tekstów JSON; wynik { stopped }.
+  // Bez workera (np. strona z dysku) ten sam kod idzie w Pyodide strony, z przerwą po każdym elemencie generatora.
+  function background(cfg) {
+    let w = null, ready = null, job = null, seq = 0, mainStop = false;
+    let mode = typeof Worker === "function" && location.protocol !== "file:" ? "worker" : "main";
+    const kill = () => { if (w) w.terminate(); w = null; ready = null; };
+    function spawn() {
+      ready = (async () => {
+        const files = await cfg.files();
+        await new Promise((res, rej) => {
+          w = new Worker(cfg.worker || "bg.js");
+          w.onmessage = (ev) => {
+            const m = ev.data;
+            if (m.type === "ready") { res(); return; }
+            if (m.type === "init-error") { rej(new Error(m.message)); return; }
+            if (!job || m.id !== job.id) return;
+            const j = job;
+            if (m.type === "event") j.onEvent(JSON.parse(m.data));
+            else { job = null; if (m.type === "done") j.res({ stopped: false }); else j.rej(new Error(m.message)); }
+          };
+          w.onerror = (ev) => {
+            ev.preventDefault();
+            const err = new Error(ev.message || "worker");
+            rej(err);
+            if (job) { const j = job; job = null; j.rej(err); }
+          };
+          w.postMessage({ type: "init", pyodide: cfg.pyodide, files, setup: cfg.setup });
+        });
+      })();
+      return ready;
+    }
+    let busy = false;
+    async function run(code, vars, onEvent, files) {
+      if (busy) throw new Error(L("trwa inne liczenie w tle; zatrzymaj je albo poczekaj na koniec", "another background computation is running; stop it or wait for it to finish"));
+      busy = true;
+      try { return await run1(code, vars, onEvent, files); } finally { busy = false; }
+    }
+    async function run1(code, vars, onEvent, files) {
+      if (mode === "worker") {
+        try { await (ready || spawn()); }
+        catch (e) { kill(); mode = "main"; console.warn("obliczenia w tle niedostępne, liczę na stronie:", e); }
+      }
+      if (mode === "worker") {
+        return new Promise((res, rej) => {
+          job = { id: ++seq, res, rej, onEvent };
+          w.postMessage({ type: "job", id: job.id, code, vars, files });
+        });
+      }
+      const py = cfg.mainPy();
+      mainStop = false;
+      Object.entries(files || {}).forEach(([p, d]) => py.FS.writeFile(p, d));
+      Object.entries(vars || {}).forEach(([k, v]) => py.globals.set(k, v));
+      const gen = py.runPython(code);
+      try {
+        for (;;) {
+          if (mainStop) return { stopped: true };
+          const r = gen.next();
+          if (r.done) break;
+          onEvent(JSON.parse(r.value));
+          await new Promise((res) => setTimeout(res, 0));
+        }
+      } finally { if (gen.destroy) gen.destroy(); }
+      return { stopped: false };
+    }
+    function stop() {
+      mainStop = true;
+      if (job) { const j = job; job = null; kill(); j.res({ stopped: true }); }
+    }
+    return { run, stop, get mode() { return mode; }, get starting() { return mode === "worker" && !!ready && !job; } };
+  }
+
+  // ---------- S: mapa ciepła dla przeglądu dwóch parametrów ----------
+  // xs, ys: wartości parametrów; cell(x, y) -> [liczby]; w komórce średnia i n; skala sekwencyjna (viridis)
+  const VIRIDIS = ["#440154", "#3b528b", "#21908c", "#5dc963", "#fde725"];
+  function viridis(t) {
+    t = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
+    const i = Math.min(VIRIDIS.length - 2, Math.floor(t)), f = t - i;
+    const a = VIRIDIS[i], b = VIRIDIS[i + 1], h = (c, k) => parseInt(c.slice(1 + 2 * k, 3 + 2 * k), 16);
+    return "rgb(" + [0, 1, 2].map((k) => Math.round(h(a, k) + (h(b, k) - h(a, k)) * f)).join(",") + ")";
+  }
+  function heatmap(canvas, spec) {
+    const { xs, ys, cell, xlabel, ylabel, title } = spec;
+    const cs = getComputedStyle(document.documentElement), c = (n) => cs.getPropertyValue(n).trim();
+    const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth || 600;
+    const H = Math.max(200, Math.min(420, 70 + ys.length * 44));
+    canvas.style.height = H + "px";
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = c("--panel"); ctx.fillRect(0, 0, W, H);
+    const vals = xs.map((x) => ys.map((y) => { const v = cell(x, y); return { m: v.length ? mean(v) : null, n: v.length }; }));
+    const all = vals.flat().filter((v) => v.m !== null).map((v) => v.m);
+    if (!all.length) return;
+    const lo = Math.min(...all), hi = Math.max(...all);
+    ctx.font = "11px " + (c("--font-mono") || "monospace");
+    const L0 = Math.max(56, 30 + Math.max(...ys.map((y) => ctx.measureText(String(y)).width))), R0 = 56, T0 = 22, B0 = 44;
+    const cw = (W - L0 - R0) / xs.length, ch = (H - T0 - B0) / ys.length;
+    const f = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
+    ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = c("--ink"); ctx.fillText(title || "", L0, 4);
+    vals.forEach((col, i) => col.forEach((v, j) => {
+      const x = L0 + i * cw, y = T0 + (ys.length - 1 - j) * ch;
+      if (v.m === null) { ctx.strokeStyle = c("--line"); ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2); return; }
+      const t = hi > lo ? (v.m - lo) / (hi - lo) : 0.5;
+      ctx.fillStyle = viridis(t); ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
+      ctx.fillStyle = t > 0.6 ? "#111" : "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      if (cw > 34 && ch > 16) ctx.fillText(f(v.m), x + cw / 2, y + ch / 2);
+    }));
+    ctx.fillStyle = c("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    xs.forEach((x, i) => ctx.fillText(String(x), L0 + (i + 0.5) * cw, H - B0 + 6));
+    ctx.fillText(xlabel || "", L0 + (W - L0 - R0) / 2, H - B0 + 24);
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ys.forEach((y, j) => ctx.fillText(String(y), L0 - 6, T0 + (ys.length - 1 - j + 0.5) * ch));
+    ctx.save(); ctx.translate(12, T0 + (H - T0 - B0) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText(ylabel || "", 0, 0); ctx.restore();
+    // pasek skali po prawej
+    const bx = W - R0 + 14, bh = H - T0 - B0;
+    for (let k = 0; k < bh; k++) { ctx.fillStyle = viridis(1 - k / bh); ctx.fillRect(bx, T0 + k, 10, 1); }
+    ctx.fillStyle = c("--muted"); ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(f(hi), bx + 13, T0);
+    ctx.textBaseline = "bottom"; ctx.fillText(f(lo), bx + 13, T0 + bh);
+  }
+
+  // recs: [{ x, y, v }] z wierszy wyników; wartości osi posortowane (liczby rosnąco)
+  function heatFrom(canvas, recs, xlabel, ylabel, title) {
+    const uniq = (k) => [...new Set(recs.map((r) => r[k]))].sort((a, b) => (typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b))));
+    const xs = uniq("x"), ys = uniq("y");
+    heatmap(canvas, { xs, ys, xlabel, ylabel, title,
+      cell: (x, y) => recs.filter((r) => r.x === x && r.y === y && typeof r.v === "number" && isFinite(r.v)).map((r) => r.v) });
+  }
+
+  // ---------- Q: dostępność ----------
+  // link „Przejdź do treści”, zakładki ze strzałkami (wzorzec ARIA tabs), nazwy obszarów i obrazów, komunikaty czytane przez czytnik.
+  // labels: [[element, pl, en, atrybut = "aria-label"]]
+  function a11y(opts) {
+    const { main, tabs, labels = [], live = [] } = opts;
+    if (main) {
+      const a = document.createElement("a"); a.className = "skip-link"; a.href = "#" + main.id;
+      document.body.prepend(a);
+      main.tabIndex = -1;
+      labels.push([a, "Przejdź do treści", "Skip to content", "text"]);
+    }
+    if (tabs) {
+      const list = [...tabs.querySelectorAll('[role="tab"]')];
+      const sync = () => list.forEach((t) => { t.tabIndex = t.getAttribute("aria-selected") === "true" ? 0 : -1; });
+      list.forEach((t) => {
+        if (!t.id) t.id = "tab-" + t.dataset.tab;
+        const panel = document.querySelector(`[data-panel="${t.dataset.tab}"]`);
+        if (panel) {
+          if (!panel.id) panel.id = "panel-" + t.dataset.tab;
+          panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-labelledby", t.id);
+          t.setAttribute("aria-controls", panel.id);
+        }
+        t.addEventListener("keydown", (ev) => {
+          const i = list.indexOf(t), k = ev.key;
+          let j = k === "ArrowRight" ? i + 1 : k === "ArrowLeft" ? i - 1 : k === "Home" ? 0 : k === "End" ? list.length - 1 : null;
+          if (j === null) return;
+          ev.preventDefault();
+          j = (j + list.length) % list.length;
+          list[j].click(); list[j].focus();
+        });
+      });
+      new MutationObserver(sync).observe(tabs, { subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+      sync();
+    }
+    live.forEach((el) => { if (el) { el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); } });
+    const lab = () => labels.forEach(([el, pl, en, attr = "aria-label"]) => {
+      if (!el) return;
+      if (attr === "text") el.textContent = L(pl, en); else el.setAttribute(attr, L(pl, en));
+    });
+    relabels.push(lab); lab();
+  }
+
+  // ---------- R: link do eksperymentu „Co wypróbować” ----------
+  // ?try=<nr karty>.<nr wariantu> albo ?try=<nr karty>.reps (oba warianty × 5 seedów); numeracja od 1
+  function tryLink(i, v) {
+    const u = new URL(location.href);
+    ["s", "lang", "try"].forEach((k) => u.searchParams.delete(k));
+    u.searchParams.set("try", (i + 1) + "." + (v === "reps" ? "reps" : v + 1));
+    return u.toString();
+  }
+  function tryFromURL(items) {
+    const q = new URLSearchParams(location.search).get("try");
+    if (!q) return null;
+    const u = new URL(location.href); u.searchParams.delete("try"); history.replaceState(null, "", u);
+    const m = /^(\d+)\.(\d+|reps)$/.exec(q);
+    if (!m) return null;
+    const it = items[+m[1] - 1];
+    if (!it) return null;
+    if (m[2] === "reps") return { it, reps: true };
+    const v = +m[2] - 1;
+    return v >= 0 && v < it.variants.length ? { it, v } : null;
+  }
+  // relabel: przycisk na stałe w stronie (przy zmianie języka); w pasku eksperymentu przycisk powstaje od nowa
+  function linkButton(getUrl, relabel = false) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn small";
+    const lab = () => { b.textContent = L("Kopiuj link", "Copy link"); b.title = L("Link otwiera stronę od razu na tym eksperymencie.", "The link opens the page straight on this experiment."); };
+    lab(); if (relabel) relabels.push(lab);
+    b.addEventListener("click", async () => {
+      const ok = await copy(getUrl());
+      if (ok) { b.textContent = L("Skopiowano", "Copied"); setTimeout(lab, 1500); }
+    });
+    return b;
+  }
+
+  // ---------- U: pamięć podręczna i praca bez sieci ----------
+  // rejestruje sw.js; el dostaje krótką informację, gdy strona jest już zapisana w przeglądarce
+  function offline(el) {
+    if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+    const say = () => {
+      if (!el || !navigator.serviceWorker.controller) return;
+      el.hidden = false;
+      el.textContent = navigator.onLine
+        ? L("Strona i Python są zapisane w tej przeglądarce: kolejne otwarcie będzie szybsze i zadziała bez internetu.",
+            "The page and Python are stored in this browser: the next visit will be faster and will work without internet.")
+        : L("Brak internetu: strona działa z kopii zapisanej w przeglądarce.", "No internet: the page runs from the copy stored in this browser.");
+    };
+    navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready).then(say).catch(() => {});
+    navigator.serviceWorker.addEventListener("controllerchange", say);
+    window.addEventListener("online", say); window.addEventListener("offline", say);
+    relabels.push(say);
+  }
+
   return { fileInputs, disabledHint, emptyNote, ready, loadFailed, settings, copy, paramHelp, fmtValue,
     basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON,
-    scaleBar, savePNG, pngButtons, boxPlot, repTable, mean, sd, tour, mobileTabs, gallery };
+    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, mean, sd, tour, mobileTabs, gallery,
+    a11y, background, heatmap, heatFrom, tryLink, tryFromURL, linkButton, offline };
 })();

@@ -104,7 +104,7 @@ details.cat > summary {
 .hint { font-size: 12px; color: var(--muted); margin: 0; }
 .source { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
 
-main { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.results { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .displays { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 1100px) { .displays { grid-template-columns: minmax(0, 1fr); } }
 figure.display { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
@@ -168,6 +168,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   </div>
 </header>
 
+<main id="main">
 <nav class="tabs" role="tablist">
   <button role="tab" aria-selected="true" data-tab="sim" id="tab-sim">Symulacja</button>
   <button role="tab" aria-selected="false" data-tab="batch" id="tab-batch">Eksperymenty batch</button>
@@ -177,7 +178,8 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 
 <!-- SYMULACJA -->
 <section data-panel="sim" class="layout">
-  <aside class="params">
+  <aside class="params" role="region">
+    <h2 class="sr-only">Ustawienia</h2>
     <div class="controls">
       <button class="btn primary" id="btnInit">Inicjalizuj</button>
       <button class="btn" id="btnRun" data-noi18n disabled>Start</button>
@@ -232,9 +234,10 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <div id="paramForm"></div>
   </aside>
 
-  <main>
+  <div class="results">
     <div class="try-banner" id="tryBanner" hidden data-noi18n></div>
     <div id="messages"></div>
+    <p class="sr-only" id="mapLive" data-noi18n></p>
     <dl class="stats" id="stats"></dl>
     <div class="displays">
       <figure class="display">
@@ -280,7 +283,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <p class="hint">Odpowiedniki plików z <code>results/</code> dla bieżącego przebiegu. <code>ablation_results.csv</code> powstaje w cyklu <code>end_cycle</code>. <code>config.json</code> zapisuje ustawienia przebiegu, seed, sieć i wersję modelu.</p>
       <div class="controls" id="simDownloads"></div>
     </div>
-  </main>
+  </div>
 </section>
 
 <!-- BATCH -->
@@ -306,8 +309,33 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <div class="controls"><select id="bBoxMetric" aria-label="Wynik na wykresie" data-nosort></select></div>
       <canvas id="bBoxCanvas"></canvas>
     </div>
+    <div class="box-plot" id="bHeatBox" hidden>
+      <h2>Mapa ciepła: dwa zmieniane parametry</h2>
+      <p class="hint">Średnia wybranego wyniku w każdej kombinacji; kolor od najniższej (fioletowy) do najwyższej (żółty) wartości.</p>
+      <canvas id="bHeat" class="heat"></canvas>
+    </div>
     <div class="table-wrap" id="bTable"></div>
     <div class="controls" id="bDownloads"></div>
+  </div>
+  <div class="panel" id="parksPanel">
+    <h2>Wszystkie parki z biblioteki</h2>
+    <p class="hint">Ustawienia z zakładki Symulacja na każdym parku z biblioteki, bez animacji, z seedami od 1 do podanej liczby. Przy „20 na km ścieżki” liczba agentów (compat_N) rośnie z długością ścieżek, jak w „Co wypróbować”; to działa przy włączonym rdzeniu zgodności (compat_core).</p>
+    <div class="controls">
+      <div class="field"><label for="vCycles">Cykle</label><input type="number" id="vCycles" min="1" value="3000"></div>
+      <div class="field"><label for="vSeeds">Liczba seedów</label><input type="number" id="vSeeds" min="1" max="30" value="3"></div>
+      <div class="field wide"><label for="vN">Liczba agentów</label>
+        <select id="vN" data-nosort><option value="density">20 na km ścieżki</option><option value="params">z ustawień</option></select></div>
+      <button class="btn primary" id="vRun">Porównaj parki</button>
+      <button class="btn" id="vStop" disabled>Zatrzymaj</button>
+    </div>
+    <p class="hint mono" id="vProg" data-noi18n>—</p>
+    <div class="table-wrap" id="vTable" data-noi18n></div>
+    <div class="box-plot" id="vBox" hidden>
+      <h2>Wynik w parkach</h2>
+      <div class="controls"><select id="vMetric" aria-label="Wynik na wykresie" data-nosort></select></div>
+      <canvas id="vCanvas"></canvas>
+    </div>
+    <div class="controls"><button class="btn" id="vDl" disabled>parks.csv</button></div>
   </div>
 </section>
 
@@ -371,8 +399,10 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <pre class="cite" id="citeText" data-noi18n></pre>
     <div class="controls"><button class="btn small" id="btnCite">Kopiuj</button><button class="btn small" id="btnBib">Kopiuj BibTeX</button></div>
     <p class="hint" id="modelVer" data-noi18n></p>
+    <p class="hint" id="offlineNote" hidden data-noi18n></p>
   </div>
 </section>
+</main>
 
 <script>
 "use strict";
@@ -390,7 +420,117 @@ const RESTART_KEYS = new Set(["real_env", "world_size", "grid_cols", "grid_rows"
   "bank_on", "bank_present_share", "movement_mode", "dest_file", "dest_count", "dest_placement", "entrance_file",
   "entrance_dist", "bypass_on", "through_share"]);
 
-let py = null, DEFAULTS = {}, GUI = [], EXPS = {};
+let py = null, DEFAULTS = {}, GUI = [], EXPS = {}, SRC = "";
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
+// kod startowy Pythona: ten sam na stronie i w obliczeniach w tle (bg.js)
+const SETUP_PY = `
+import sys, json
+sys.path.insert(0, ".")
+import sipd
+M = None
+B = None
+GEO = None
+_GEO_NAME = "siec"
+
+def _proc_geo(text, name, fix):
+    """Tekst sieci (GeoJSON lub odpowiedź Overpass) -> (tekst, info); poprawki sieci z PD (psm.py) dla danych w stopniach."""
+    obj = json.loads(text)
+    info = {}
+    if obj.get("elements") is not None or fix:
+        import psm
+        mark = obj.get(psm.PROCESSED_MARK)
+        geo_pts = obj.get("elements") is not None or psm.looks_geographic(
+            [p for _k, parts in psm.geojson_features(obj) for part in parts for p in part])
+        if mark:
+            info = {"processed": True}
+        elif geo_pts:
+            r, o, b = psm.load_inputs(text, None, name)
+            text = json.dumps(psm.processed_geojson(r, o, b, psm.LOAD_INFO["origin"], psm.LOAD_INFO), separators=(",", ":"))
+            info = {k: v for k, v in psm.LOAD_INFO.items() if k != "origin"}
+            info["fixed"] = True
+    net = sipd.PathNetwork.from_geojson(text)
+    info.update(nodes=len(net.vertices), edges=sum(len(v) for v in net.adj.values()) // 2)
+    return text, info
+
+def _prep_geo(text, name, fix):
+    global GEO, _GEO_NAME
+    text, info = _proc_geo(text, name, fix)
+    GEO, _GEO_NAME = text, name
+    return json.dumps(info)
+
+def _new_model(params_json, seed):
+    global M
+    M = sipd.Model(sipd.Params(**json.loads(params_json)), seed=seed, geojson=GEO)
+    return json.dumps({"warnings": M.warnings, "network": json.loads(M.network_json())})
+def _zones_geojson():
+    return M.rest_zones_geojson() if M is not None else ""
+def _set(key, value_json):
+    if M is not None:
+        setattr(M.p, key, json.loads(value_json))
+def _step(n):
+    M.run(n)
+    return M.snapshot()
+def _csv(name):
+    src = {"PD.csv": M.game_log, "ablation_results.csv": M.ablation_rows,
+           "regression_fingerprint.csv": M.fingerprint_rows, "perf.csv": M.perf_rows,
+           "character_timeseries.csv": M.timeseries_rows}[name]
+    return sipd.to_csv(name, src)
+def _batch_csv(name, b=None):
+    b = b or B
+    src = {"ablation_results.csv": b.ablation_rows, "regression_fingerprint.csv": b.fingerprint_rows,
+           "compat_results.csv": b.compat_rows}[name]
+    return sipd.to_csv(name, src)
+
+# zadania liczone w tle (bg.js) albo, bez workera, na stronie; nie ruszają M, B ani GEO strony
+def _rep_metrics(m):
+    return {"gpp": m.mean_games_per_partner(), "enc_rem": 100 * m.enc_share_remembered,
+            "known": m.mean_known_partners(), "distinct": m.mean_distinct_partners_window(),
+            "share_d": 100 * m.nb_moves_D / max(1, m.nb_moves_C + m.nb_moves_D)}
+
+def _job_runs(runs_json, geos_json, cycles, chunk):
+    """Przebiegi bez animacji: runs = [{params, seed, geo}], geo = klucz w geos (surowy tekst sieci) albo null."""
+    runs, raw, geos = json.loads(runs_json), json.loads(geos_json), {}
+    for k, r in enumerate(runs):
+        g = r.get("geo")
+        if g is not None and g not in geos:
+            geos[g] = _proc_geo(raw[g], g, True)[0]
+        m = sipd.Model(sipd.Params(**r["params"]), seed=r["seed"], geojson=geos.get(g))
+        c = 0
+        while c < cycles:
+            n = min(chunk, cycles - c)
+            m.run(n)
+            c += n
+            yield json.dumps({"t": "cycle", "k": k, "cycle": c})
+        yield json.dumps({"t": "run", "k": k, "m": _rep_metrics(m)})
+
+_BATCH_FILES = ("ablation_results.csv", "regression_fingerprint.csv", "compat_results.csv")
+def _job_batch(name, repeat, end, seed, geo):
+    b = sipd.BatchRun(name, repeat=repeat, end_cycle=end, geojson=geo, seed=seed)
+    done, last = False, -1
+    while not done:
+        done = b.advance(3000)
+        pr = json.loads(b.progress())
+        ev = {"t": "prog", "pr": pr}
+        if pr["done"] != last or done:
+            last = pr["done"]
+            ev["csv"] = {n: _batch_csv(n, b) for n in _BATCH_FILES}
+        yield json.dumps(ev)
+def _meta():
+    exps = {k: {"repeat": v["repeat"], "until": v["until"], "seed": v.get("seed"),
+                "among": v.get("among", {}), "params": v["params"]} for k, v in sipd.BATCH_EXPERIMENTS.items()}
+    return json.dumps({"defaults": sipd.DEFAULTS, "gui": sipd.GUI_PARAMETERS, "exps": exps,
+                       "game_types": sipd.GAME_TYPES, "characters": sipd.CHARACTERS})
+`;
+// T: powtórzenia, batch i zestawienie parków liczą się w tle, więc strona nie przestaje reagować
+const BG = UX.background({
+  pyodide: PYODIDE, setup: SETUP_PY, mainPy: () => py,
+  files: async () => {
+    const f = { "sipd.py": SRC };
+    try { const r = await fetch("psm.py", { cache: "no-cache" }); if (r.ok) f["psm.py"] = await r.text(); } catch (e) { /* bez poprawek sieci */ }
+    return f;
+  },
+});
+const BG_START = ["Uruchamianie obliczeń w tle (za pierwszym razem kilka sekund)…", "Starting background computation (a few seconds the first time)…"];
 let running = false, snap = null, net = null, hasModel = false;
 let chartScore = null, chartDunbar = null, chartShares = null;
 let batchStop = false;
@@ -431,64 +571,8 @@ async function boot() {
   py.FS.writeFile("sipd.py", src);
   MODEL_HASH = await UX.hashText(src);
   renderVersion();
-  py.runPython(`
-import sys, json
-sys.path.insert(0, ".")
-import sipd
-M = None
-B = None
-GEO = None
-_GEO_NAME = "siec"
-
-def _prep_geo(text, name, fix):
-    """Tekst sieci (GeoJSON lub odpowiedź Overpass) -> GEO; poprawki sieci z PD (psm.py) dla danych w stopniach."""
-    global GEO, _GEO_NAME
-    obj = json.loads(text)
-    info = {}
-    if obj.get("elements") is not None or fix:
-        import psm
-        mark = obj.get(psm.PROCESSED_MARK)
-        geo_pts = obj.get("elements") is not None or psm.looks_geographic(
-            [p for _k, parts in psm.geojson_features(obj) for part in parts for p in part])
-        if mark:
-            info = {"processed": True}
-        elif geo_pts:
-            r, o, b = psm.load_inputs(text, None, name)
-            text = json.dumps(psm.processed_geojson(r, o, b, psm.LOAD_INFO["origin"], psm.LOAD_INFO), separators=(",", ":"))
-            info = {k: v for k, v in psm.LOAD_INFO.items() if k != "origin"}
-            info["fixed"] = True
-    net = sipd.PathNetwork.from_geojson(text)
-    GEO, _GEO_NAME = text, name
-    info.update(nodes=len(net.vertices), edges=sum(len(v) for v in net.adj.values()) // 2)
-    return json.dumps(info)
-
-def _new_model(params_json, seed):
-    global M
-    M = sipd.Model(sipd.Params(**json.loads(params_json)), seed=seed, geojson=GEO)
-    return json.dumps({"warnings": M.warnings, "network": json.loads(M.network_json())})
-def _zones_geojson():
-    return M.rest_zones_geojson() if M is not None else ""
-def _set(key, value_json):
-    if M is not None:
-        setattr(M.p, key, json.loads(value_json))
-def _step(n):
-    M.run(n)
-    return M.snapshot()
-def _csv(name):
-    src = {"PD.csv": M.game_log, "ablation_results.csv": M.ablation_rows,
-           "regression_fingerprint.csv": M.fingerprint_rows, "perf.csv": M.perf_rows,
-           "character_timeseries.csv": M.timeseries_rows}[name]
-    return sipd.to_csv(name, src)
-def _batch_csv(name):
-    src = {"ablation_results.csv": B.ablation_rows, "regression_fingerprint.csv": B.fingerprint_rows,
-           "compat_results.csv": B.compat_rows}[name]
-    return sipd.to_csv(name, src)
-def _meta():
-    exps = {k: {"repeat": v["repeat"], "until": v["until"], "seed": v.get("seed"),
-                "among": v.get("among", {}), "params": v["params"]} for k, v in sipd.BATCH_EXPERIMENTS.items()}
-    return json.dumps({"defaults": sipd.DEFAULTS, "gui": sipd.GUI_PARAMETERS, "exps": exps,
-                       "game_types": sipd.GAME_TYPES, "characters": sipd.CHARACTERS})
-`);
+  py.runPython(SETUP_PY);
+  SRC = src;
   const meta = JSON.parse(py.runPython("_meta()"));
   DEFAULTS = meta.defaults; GUI = meta.gui; EXPS = meta.exps;
   buildForm(meta);
@@ -501,7 +585,11 @@ def _meta():
   initSettings();
   $("loading").hidden = true;
   initModel();
-  startTour(false);
+  // R: link do eksperymentu „Co wypróbować” (?try=…) uruchamia go od razu, bez samouczka
+  const tl = UX.tryFromURL(TRY);
+  if (tl && tl.reps) runReps(tl.it);
+  else if (tl) runTry(tl.it, tl.v);
+  else startTour(false);
 }
 
 // ---------- formularz parametrów ----------
@@ -891,39 +979,37 @@ function buildBatch() {
   };
   sel.addEventListener("change", describe); describe();
   $("bRun").addEventListener("click", runBatch);
-  $("bStop").addEventListener("click", () => { batchStop = true; });
+  $("bStop").addEventListener("click", () => { batchStop = true; BG.stop(); });
 }
+let batchFiles = null;   // ostatnie pliki CSV batcha (po każdym ukończonym przebiegu)
 async function runBatch() {
   const name = $("bExp").value;
   const repeat = parseInt($("bRepeat").value, 10) || 1;
   const end = parseInt($("bEnd").value, 10) || 1;
   const seedTxt = $("bSeed").value.trim();
-  py.globals.set("_bname", name);
-  py.globals.set("_brep", repeat);
-  py.globals.set("_bend", end);
-  py.globals.set("_bseed", seedTxt === "" ? null : parseInt(seedTxt, 10));
   batchConfig = { model: "SIPD", model_file: "sipd.py", model_version: MODEL_HASH, app: location.origin + location.pathname,
     saved: new Date().toISOString(), batch: { experiment: name, spec: EXPS[name], repeat, end_cycle: end, seed: seedTxt || null },
     network: netLabel() };
-  try {
-    py.runPython("B = sipd.BatchRun(_bname, repeat=_brep, end_cycle=_bend, geojson=GEO, seed=_bseed)");
-  } catch (e) { $("bProgTxt").textContent = pyError(e); return; }
-  batchStop = false;
+  batchStop = false; batchFiles = null;
   $("bRun").disabled = true; $("bStop").disabled = false;
-  $("bTable").replaceChildren(); $("bSummary").replaceChildren(); $("bDownloads").replaceChildren();
+  $("bTable").replaceChildren(); $("bSummary").replaceChildren(); $("bDownloads").replaceChildren(); $("bBox").hidden = true; $("bHeatBox").hidden = true;
+  $("bProg").removeAttribute("value");
+  $("bProgTxt").textContent = L(...BG_START);
   const t0 = performance.now();
-  let done = false;
-  while (!done && !batchStop) {
-    try { done = py.runPython("B.advance(3000)"); }
-    catch (e) { $("bProgTxt").textContent = pyError(e); break; }
-    const pr = JSON.parse(py.runPython("B.progress()"));
-    $("bProg").max = pr.total; $("bProg").value = pr.done + (pr.limit ? pr.cycle / (pr.limit + 1) : 0);
-    $("bProgTxt").textContent = L("przebieg ", "run ") + Math.min(pr.done + 1, pr.total) + " / " + pr.total +
-      L(" · cykl ", " · cycle ") + pr.cycle + " / " + pr.limit + " · " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
-    await new Promise((r) => setTimeout(r, 0));
-  }
+  let res = { stopped: false };
+  try {
+    res = await BG.run("_job_batch(_J_name, _J_rep, _J_end, _J_seed, _J_geo)",
+      { _J_name: name, _J_rep: repeat, _J_end: end, _J_seed: seedTxt === "" ? null : parseInt(seedTxt, 10), _J_geo: py.globals.get("GEO") || null },
+      (ev) => {
+        const pr = ev.pr;
+        $("bProg").max = pr.total; $("bProg").value = pr.done + (pr.limit ? pr.cycle / (pr.limit + 1) : 0);
+        $("bProgTxt").textContent = L("przebieg ", "run ") + Math.min(pr.done + 1, pr.total) + " / " + pr.total +
+          L(" · cykl ", " · cycle ") + pr.cycle + " / " + pr.limit + " · " + ((performance.now() - t0) / 1000).toFixed(1) + " s";
+        if (ev.csv) { batchFiles = ev.csv; showBatchResults(); }
+      });
+  } catch (e) { $("bProgTxt").textContent = pyError(e); }
   $("bRun").disabled = false; $("bStop").disabled = true;
-  if (batchStop) $("bProgTxt").textContent += L(" · zatrzymano", " · stopped");
+  if (res.stopped) $("bProgTxt").textContent += L(" · zatrzymano", " · stopped");
   showBatchResults();
 }
 function table(headers, rows, numericFrom = 1) {
@@ -951,9 +1037,10 @@ function parseCsv(text) {
   return { head, rows };
 }
 function showBatchResults() {
-  const abl = parseCsv(py.globals.get("_batch_csv")("ablation_results.csv"));
-  const fp = parseCsv(py.globals.get("_batch_csv")("regression_fingerprint.csv"));
-  const cr = parseCsv(py.globals.get("_batch_csv")("compat_results.csv"));
+  if (!batchFiles) return;
+  const abl = parseCsv(batchFiles["ablation_results.csv"]);
+  const fp = parseCsv(batchFiles["regression_fingerprint.csv"]);
+  const cr = parseCsv(batchFiles["compat_results.csv"]);
   const use = cr.rows.length ? ["compat_results.csv", cr]
     : (abl.rows.length ? ["ablation_results.csv", abl] : (fp.rows.length ? ["regression_fingerprint.csv", fp] : null));
   if (!use) return;
@@ -970,7 +1057,7 @@ function showBatchResults() {
   boxState = { data, among: Object.keys((EXPS[$("bExp").value] || {}).among || {}) };
   renderBox();
   const b = document.createElement("button"); b.className = "btn"; b.textContent = L("Pobierz ", "Download ") + fname;
-  b.addEventListener("click", () => download(fname, py.globals.get("_batch_csv")(fname)));
+  b.addEventListener("click", () => download(fname, batchFiles[fname]));
   const c = document.createElement("button"); c.className = "btn"; c.textContent = "config.json";
   c.addEventListener("click", () => UX.downloadJSON("config.json", batchConfig));
   $("bDownloads").replaceChildren(b, c);
@@ -980,6 +1067,7 @@ function showBatchResults() {
 let boxState = null;
 function renderBox() {
   const box = $("bBox");
+  $("bHeatBox").hidden = true;
   if (!boxState || !boxState.data.rows.length) { box.hidden = true; return; }
   const { head, rows } = boxState.data;
   const num = head.filter((h, j) => rows.some((r) => typeof r[j] === "number") && !["seed", "run"].includes(h));
@@ -1001,6 +1089,12 @@ function renderBox() {
     if (typeof r[j] === "number") groups.get(g).push(r[j]);
   });
   UX.boxPlot($("bBoxCanvas"), [...groups].map(([label, values]) => ({ label, values })), sel.value);
+  // S: dwa zmieniane parametry -> mapa ciepła średniej
+  $("bHeatBox").hidden = vary.length !== 2;
+  if (vary.length === 2) {
+    const [kx, ky] = vary, ix = head.indexOf(kx), iy = head.indexOf(ky);
+    UX.heatFrom($("bHeat"), rows.map((r) => ({ x: r[ix], y: r[iy], v: r[j] })), kx, ky, L("średnia: ", "mean: ") + sel.value);
+  }
 }
 
 // ---------- testy ----------
@@ -1031,6 +1125,25 @@ $("btnStep").addEventListener("click", () => { stop(); if (stepOnce(1)) { redraw
 $("layer").addEventListener("change", redraw);
 $("mapMain").addEventListener("click", pickAgent);
 $("mapMem").addEventListener("click", pickAgent);
+// Q: mapa z klawiatury – strzałki wybierają poprzedniego/następnego agenta w parku
+function selectAgent(i) {
+  $("p_selected_index").value = i;
+  onParamChange("selected_index");
+  snap = JSON.parse(py.runPython("M.snapshot()"));
+  redraw();
+  const p = snap.players.find((x) => x.i === i);
+  $("mapLive").textContent = L("Wybrany agent ", "Selected agent ") + i + (p && p.ch ? ": " + p.ch : "");
+}
+function mapKey(ev) {
+  const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
+  if (!d || !snap || !snap.players.length) return;
+  ev.preventDefault();
+  const ids = snap.players.filter((p) => p.in_park !== false).map((p) => p.i);
+  if (!ids.length) return;
+  const cur = ids.indexOf(parseInt($("p_selected_index").value, 10));
+  selectAgent(ids[((cur < 0 ? (d > 0 ? -1 : 0) : cur) + d + ids.length) % ids.length]);
+}
+["mapMain", "mapMem"].forEach((id) => { $(id).tabIndex = 0; $(id).setAttribute("role", "img"); $(id).addEventListener("keydown", mapKey); });
 $("tRun").addEventListener("click", runTests);
 // ---------- sieć: plik, gotowy park albo OSM (poprawki sieci z PD, web/psm.py) ----------
 let psmReady = false;
@@ -1444,14 +1557,28 @@ const REP_METRICS = [
   { key: "distinct", pl: "różnych partnerów w oknie", en: "distinct partners in window" },
   { key: "share_d", pl: "udział D (%)", en: "share of D (%)" },
 ];
-const REP_PY = "json.dumps({'gpp': M.mean_games_per_partner(), 'enc_rem': 100 * M.enc_share_remembered, " +
-  "'known': M.mean_known_partners(), 'distinct': M.mean_distinct_partners_window(), " +
-  "'share_d': 100 * M.nb_moves_D / max(1, M.nb_moves_C + M.nb_moves_D)})";
-let repStop = false, repLast = null;
+let repLast = null;
 function renderRep() {
   if (!repLast) return;
   $("repTitle").textContent = L("Powtórzenia: ", "Replicates: ") + L(repLast.it.title[0], repLast.it.title[1]);
   UX.repTable($("repTable"), repLast.it.variants.map((v) => v.label), REP_METRICS, repLast.res, repLast.seeds);
+}
+// surowy tekst parku z biblioteki (poprawki sieci robi zadanie w tle)
+async function parkIndex() {
+  if (!PARKS) {
+    const r = await fetch("parki/index.json", { cache: "no-cache" });
+    if (!r.ok) throw new Error("parki/index.json: HTTP " + r.status);
+    PARKS = (await r.json()).parks;
+  }
+  return PARKS;
+}
+async function libText(name) {
+  await parkIndex();
+  const it = PARKS.find((p) => p.name === name);
+  if (!it) throw new Error(name + L(": brak w bibliotece", ": not in the library"));
+  const r = await fetch("parki/" + it.file, { cache: "no-cache" });
+  if (!r.ok) throw new Error(it.file + ": HTTP " + r.status);
+  return r.text();
 }
 async function runReps(it) {
   if (!py) return;
@@ -1461,47 +1588,110 @@ async function runReps(it) {
   UX.tryBanner($("tryBanner"), null);
   const seeds = [1, 2, 3, 4, 5], res = it.variants.map(() => []), CYC = 3000;
   repLast = { it, seeds, res };
-  repStop = false;
   $("repPanel").hidden = false; $("repStop").disabled = false; $("repTable").replaceChildren();
   renderRep();
   $("repPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("repProg").textContent = L(...BG_START);
   const t0 = performance.now();
-  let err = "";
+  let err = "", out = { stopped: false };
   try {
-    for (let vi = 0; vi < it.variants.length && !repStop; vi++) {
-      const v = it.variants[vi];
-      if (v.park) {
-        $("parkSel").value = v.park; $("parkCustomRow").hidden = true;
-        if (!(await loadParkLib())) throw new Error($("geoInfo").textContent);
-        if (PARK_GAL) PARK_GAL.mark(v.park);
-      }
-      const params = Object.assign({}, DEFAULTS, TRY_BASE, v.params);
-      for (const seed of seeds) {
-        if (repStop) break;
-        py.globals.get("_new_model")(JSON.stringify(params), seed);
-        let c = 0;
-        while (c < CYC && !repStop) {
-          const n = Math.min(250, CYC - c);
-          py.runPython("M.run(" + n + ")"); c += n;
-          $("repProg").textContent = `${L("wariant", "variant")} ${vi + 1}/${it.variants.length} · seed ${seed} · ${L("cykl", "cycle")} ${c} · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
-          await new Promise((r) => setTimeout(r, 0));
-        }
-        if (repStop) break;
-        res[vi].push(JSON.parse(py.runPython(REP_PY)));
-        renderRep();
-      }
-    }
+    const geos = {};
+    for (const v of it.variants) if (v.park && !geos[v.park]) geos[v.park] = await libText(v.park);
+    const runs = [];
+    it.variants.forEach((v, vi) => seeds.forEach((seed) => runs.push({ vi, seed, geo: v.park || null,
+      params: Object.assign({}, DEFAULTS, TRY_BASE, v.params) })));
+    out = await BG.run("_job_runs(_J_runs, _J_geos, _J_cyc, 250)",
+      { _J_runs: JSON.stringify(runs), _J_geos: JSON.stringify(geos), _J_cyc: CYC },
+      (ev) => {
+        const r = runs[ev.k];
+        if (ev.t === "run") { res[r.vi].push(ev.m); renderRep(); return; }
+        $("repProg").textContent = `${L("wariant", "variant")} ${r.vi + 1}/${it.variants.length} · seed ${r.seed} · ${L("cykl", "cycle")} ${ev.cycle} · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+      });
   } catch (e) { err = pyError(e); }
   $("repProg").textContent = err ? L("Błąd: ", "Error: ") + err
-    : (repStop ? L("Zatrzymano", "Stopped") : L("Gotowe", "Done")) + ` · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+    : (out.stopped ? L("Zatrzymano", "Stopped") : L("Gotowe", "Done")) + ` · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
   $("repStop").disabled = true;
-  initModel();
 }
-$("repStop").onclick = () => { repStop = true; };
+$("repStop").onclick = () => BG.stop();
+$("repStop").after(UX.linkButton(() => UX.tryLink(TRY.indexOf(repLast.it), "reps"), true));
 UX.disabledHint("repStop", "Działa w trakcie liczenia powtórzeń.", "Active while replicates run.");
 
+// ---------- V: wszystkie parki z biblioteki ----------
+let parksRes = null;
+function parkGroups() {
+  const names = [...new Set(parksRes.runs.map((r) => r.park))].sort((a, b) => a.localeCompare(b, "pl"));
+  return names.map((name) => ({ label: name, N: parksRes.runs.find((r) => r.park === name).params.compat_N, recs: parksRes.res.filter((r) => r.park === name) }));
+}
+function renderParks() {
+  if (!parksRes) return;
+  const groups = parkGroups();
+  UX.groupTable($("vTable"), groups, REP_METRICS, parksRes.dens ? [{ pl: "agentów (compat_N)", en: "agents (compat_N)", get: (g) => String(g.N) }] : []);
+  $("vBox").hidden = !parksRes.res.length;
+  if ($("vBox").hidden) return;
+  const sel = $("vMetric");
+  if (!sel.options.length) { REP_METRICS.forEach((m) => sel.add(new Option(L(m.pl, m.en), m.key))); }
+  [...sel.options].forEach((o) => { const m = REP_METRICS.find((x) => x.key === o.value); o.textContent = L(m.pl, m.en); });
+  UX.boxPlot($("vCanvas"), groups.map((g) => ({ label: g.label.replace(/^Park /, ""), values: g.recs.map((r) => r[sel.value]) })),
+    sel.options[sel.selectedIndex].textContent);
+}
+async function runParks() {
+  if (!py) return;
+  const cyc = Math.max(1, parseInt($("vCycles").value, 10) || 3000);
+  const ns = Math.min(30, Math.max(1, parseInt($("vSeeds").value, 10) || 1));
+  const base = readParams();
+  // compat_N ustala liczbę agentów tylko w rdzeniu zgodności
+  const dens = $("vN").value === "density" && !!base.compat_core;
+  const note = $("vN").value === "density" && !dens
+    ? L(" · rdzeń zgodności wyłączony, więc liczba agentów jest z ustawień", " · compatibility core is off, so the number of agents comes from the settings") : "";
+  $("vRun").disabled = true; $("vStop").disabled = false; $("vDl").disabled = true;
+  $("vProg").textContent = L(...BG_START);
+  const t0 = performance.now();
+  let err = "", out = { stopped: false };
+  try {
+    await parkIndex();
+    const geos = {};
+    for (const p of PARKS) geos[p.name] = await libText(p.name);
+    const runs = [];
+    PARKS.forEach((p) => { for (let seed = 1; seed <= ns; seed++) runs.push({ park: p.name, seed, geo: p.name,
+      params: Object.assign({}, base, { log_games: false }, dens ? { compat_N: Math.max(2, Math.round(20 * p.length_m / 1000)) } : {}) }); });
+    parksRes = { runs, res: [], dens, cyc, base };
+    renderParks();
+    out = await BG.run("_job_runs(_J_runs, _J_geos, _J_cyc, 250)",
+      { _J_runs: JSON.stringify(runs), _J_geos: JSON.stringify(geos), _J_cyc: cyc },
+      (ev) => {
+        const r = runs[ev.k];
+        if (ev.t === "run") { parksRes.res.push(Object.assign({ park: r.park, seed: r.seed, compat_N: r.params.compat_N }, ev.m)); renderParks(); return; }
+        $("vProg").textContent = `${parksRes.res.length + 1}/${runs.length} · ${r.park} · seed ${r.seed} · ${L("cykl", "cycle")} ${ev.cycle} · ${((performance.now() - t0) / 1000).toFixed(0)} s`;
+      });
+  } catch (e) { err = pyError(e); }
+  $("vProg").textContent = err ? L("Błąd: ", "Error: ") + err
+    : (out.stopped ? L("Zatrzymano", "Stopped") : L("Gotowe", "Done")) + ` · ${parksRes ? parksRes.res.length : 0} ${L("przebiegów", "runs")} · ${((performance.now() - t0) / 1000).toFixed(0)} s` + note;
+  $("vRun").disabled = false; $("vStop").disabled = true; $("vDl").disabled = !(parksRes && parksRes.res.length);
+}
+$("vRun").onclick = runParks;
+$("vStop").onclick = () => BG.stop();
+$("vMetric").onchange = renderParks;
+$("vDl").onclick = () => {
+  const keys = ["park", "seed", ...(parksRes.dens ? ["compat_N"] : []), ...REP_METRICS.map((m) => m.key)];
+  const q = (v) => (typeof v === "string" && /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+  download("parks.csv", [keys.join(","), ...parksRes.res.map((r) => keys.map((k) => q(r[k])).join(","))].join("\n") + "\n");
+};
+UX.disabledHint("vStop", "Działa w trakcie porównania parków.", "Active while the parks are compared.");
+UX.disabledHint("vDl", "Najpierw porównaj parki.", "Compare the parks first.");
+I18N.onChange(renderParks);
+
 // ---------- I, L, H, N: PNG, widok na telefon, samouczek, galeria parków ----------
-UX.pngButtons([...document.querySelectorAll('section[data-panel="sim"] figure.display'), $("cmpPanel"), $("bBox")]);
+UX.a11y({ main: $("main"), tabs: document.querySelector("nav.tabs"), live: [$("messages"), $("mapLive")], labels: [
+  [document.querySelector("aside.params"), "Ustawienia", "Settings"],
+  [$("mapMain"), "Mapa parku: ścieżki, agenci w kolorach charakterów i komórki według wybranej warstwy. Strzałki wybierają agenta.",
+    "Park map: paths, agents coloured by character and cells by the chosen layer. Arrow keys select an agent."],
+  [$("mapMem"), "Pamięć wybranego agenta na mapie. Strzałki wybierają agenta.", "The selected agent's memory on the map. Arrow keys select an agent."],
+  [$("bBoxCanvas"), "Wykres pudełkowy wybranego wyniku w wariantach", "Box plot of the chosen output per variant"],
+  [$("bHeat"), "Mapa ciepła średniej wybranego wyniku dla dwóch parametrów", "Heat map of the mean of the chosen output for two parameters"],
+  [$("vCanvas"), "Wykres pudełkowy wybranego wyniku w parkach", "Box plot of the chosen output per park"],
+] });
+[$("bBoxCanvas"), $("bHeat"), $("vCanvas")].forEach((c) => c.setAttribute("role", "img"));
+UX.pngButtons([...document.querySelectorAll('section[data-panel="sim"] figure.display'), $("cmpPanel"), $("bBox"), $("bHeatBox"), $("vBox")]);
 const MOB = UX.mobileTabs(document.querySelector('section[data-panel="sim"]'));
 $("bBoxMetric").onchange = renderBox;
 function startTour(force) {
@@ -1528,10 +1718,10 @@ fetch("parki/index.json", { cache: "no-cache" }).then((r) => r.json()).then((d) 
 }).catch(() => { $("parkGallery").hidden = true; });
 
 // ---------- jak cytować i wersja modelu ----------
-const CITE = "Dziedzic, S. (2026). SIPD: Spatial Iterated Prisoner's Dilemma (GAMA model, Python port and browser app) " +
+const CITE = "Dziedzic, S., Szarejko, M., & Kamiński, M. (2026). SIPD: Spatial Iterated Prisoner's Dilemma (GAMA model, Python port and browser app) " +
   "[Software]. https://github.com/SzymonDziedzic98/SIPD";
 function bibtex() {
-  return "@software{sipd,\n  author = {Dziedzic, Szymon},\n" +
+  return "@software{sipd,\n  author = {Dziedzic, Szymon and Szarejko, Maciej and Kamiński, Maciej},\n" +
     "  title = {{SIPD}: Spatial Iterated Prisoner's Dilemma ({GAMA} model, Python port and browser app)},\n" +
     "  year = {2026},\n  url = {https://github.com/SzymonDziedzic98/SIPD},\n" +
     "  note = {Model file sipd.py" + (MODEL_HASH ? ", " + MODEL_HASH : "") + "}\n}";
@@ -1547,6 +1737,7 @@ $("btnCite").onclick = () => UX.copy(CITE);
 $("btnBib").onclick = () => UX.copy(bibtex());
 renderVersion();
 
+UX.offline($("offlineNote"));
 boot();
 </script>
 </body>
