@@ -835,7 +835,9 @@ global {
 			float best_dist <- 0.0;
 			loop f over: entrances {
 				if f != e {
-					float d <- abs(((ang[f] - ang[e]) mod (2 * #pi) + 2 * #pi) mod (2 * #pi) - #pi);
+					// reszta z dzielenia dla liczb rzeczywistych jak % w Pythonie (mod w GAML jest całkowitoliczbowe)
+					float x <- ang[f] - ang[e];
+					float d <- abs(x - floor(x / (2 * #pi)) * (2 * #pi) - #pi);
 					d <- round(d * 1e6) / 1e6;
 					float dd <- nodes[e] distance_to nodes[f];
 					if best < 0 or d < best_d or (d = best_d and dd > best_dist) {
