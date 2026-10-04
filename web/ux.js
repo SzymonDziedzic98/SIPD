@@ -66,6 +66,14 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
   .mobile-tabs { display: flex; }
   [data-mview="results"] > aside.params, [data-mview="params"] > .results { display: none !important; }
 }
+.run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.run-bar > .controls { margin: 0; }
+.run-status { display: none; flex: 1 1 0; min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 860px) {
+  .run-bar { position: sticky; top: 0; z-index: 10; background: var(--ground); border-bottom: 1px solid var(--line); margin-inline: -16px; padding: 6px 16px; }
+  .run-status { display: block; }
+  .run-bar > .mobile-tabs { flex-basis: 100%; }
+}
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
 .gallery button { border: 1px solid var(--line); background: var(--ground); border-radius: 6px; padding: 4px; cursor: pointer; display: grid; gap: 2px; text-align: left; font-size: 11px; color: var(--muted); }
 .gallery button[aria-pressed="true"] { border-color: var(--focus); outline: 1px solid var(--focus); }
@@ -746,6 +754,28 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
     return { show: set };
   }
 
+  // ---------- pasek przebiegu: Inicjalizuj, Start, Krok i licznik cykli nad panelami ----------
+  // Przyciski nie siedzą w panelu parametrów, więc są pod ręką także w widoku wyników; na telefonie pasek
+  // (razem z przełącznikiem Parametry / Wyniki) zostaje u góry ekranu przy przewijaniu.
+  function runBar(section, controls, status) {
+    const bar = document.createElement("div"); bar.className = "run-bar";
+    const prev = section.previousElementSibling;
+    const tabs = prev && prev.classList.contains("mobile-tabs") ? prev : null;
+    section.before(bar);
+    bar.append(controls);
+    if (status) {
+      const mirror = document.createElement("div"); mirror.className = "run-status"; mirror.setAttribute("aria-hidden", "true");
+      const copy = () => { mirror.textContent = status.textContent.replace(/\s+/g, " ").trim(); };
+      new MutationObserver(copy).observe(status, { subtree: true, childList: true, characterData: true });
+      copy(); bar.append(mirror);
+    }
+    if (tabs) bar.append(tabs);
+    const sync = () => { bar.hidden = section.hidden; };
+    new MutationObserver(sync).observe(section, { attributes: true, attributeFilter: ["hidden"] });
+    sync();
+    return bar;
+  }
+
   // ---------- N: galeria parków ----------
   // items: [{ name, file, length_m, junctions }]; miniatury SVG z katalogu dir
   function gallery(host, items, dir, onPick) {
@@ -992,6 +1022,6 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
 
   return { fileInputs, disabledHint, emptyNote, ready, loadFailed, settings, copy, paramHelp, fmtValue,
     basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON,
-    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, mean, sd, tour, mobileTabs, gallery,
+    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, mean, sd, tour, mobileTabs, runBar, gallery,
     a11y, background, heatmap, heatFrom, tryLink, tryFromURL, linkButton, offline };
 })();
