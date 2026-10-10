@@ -1,0 +1,570 @@
+{
+ "type": "FeatureCollection",
+ "name": "przyklad_park",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 1"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.11
+     ],
+     [
+      17.0311447,
+      51.11
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 2"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0311447,
+      51.11
+     ],
+     [
+      17.0322893,
+      51.11
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 3"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0322893,
+      51.11
+     ],
+     [
+      17.033434,
+      51.11
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 4"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.1107235
+     ],
+     [
+      17.0311447,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 5"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0311447,
+      51.1107235
+     ],
+     [
+      17.0322893,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 6"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0322893,
+      51.1107235
+     ],
+     [
+      17.033434,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 7"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.111447
+     ],
+     [
+      17.0311447,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 8"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0311447,
+      51.111447
+     ],
+     [
+      17.0322893,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 9"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0322893,
+      51.111447
+     ],
+     [
+      17.033434,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 10"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.11
+     ],
+     [
+      17.03,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 11"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.1107235
+     ],
+     [
+      17.03,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 12"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0311447,
+      51.11
+     ],
+     [
+      17.0311447,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 13"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0311447,
+      51.1107235
+     ],
+     [
+      17.0311447,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 14"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0322893,
+      51.11
+     ],
+     [
+      17.0322893,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 15"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.0322893,
+      51.1107235
+     ],
+     [
+      17.0322893,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 16"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.033434,
+      51.11
+     ],
+     [
+      17.033434,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 17"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.033434,
+      51.1107235
+     ],
+     [
+      17.033434,
+      51.111447
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "roads",
+    "name": "odcinek 18"
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      17.03,
+      51.11
+     ],
+     [
+      17.0311447,
+      51.1107235
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 1"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0311876,
+       51.1107506
+      ],
+      [
+       17.0312734,
+       51.1107506
+      ],
+      [
+       17.0312734,
+       51.1108049
+      ],
+      [
+       17.0311876,
+       51.1108049
+      ],
+      [
+       17.0311876,
+       51.1107506
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 2"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0321605,
+       51.1107506
+      ],
+      [
+       17.0322464,
+       51.1107506
+      ],
+      [
+       17.0322464,
+       51.1108049
+      ],
+      [
+       17.0321605,
+       51.1108049
+      ],
+      [
+       17.0321605,
+       51.1107506
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 3"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0323322,
+       51.1106421
+      ],
+      [
+       17.0324181,
+       51.1106421
+      ],
+      [
+       17.0324181,
+       51.1106964
+      ],
+      [
+       17.0323322,
+       51.1106964
+      ],
+      [
+       17.0323322,
+       51.1106421
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 4"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0305008,
+       51.1110672
+      ],
+      [
+       17.0306439,
+       51.1110672
+      ],
+      [
+       17.0306439,
+       51.1111033
+      ],
+      [
+       17.0305008,
+       51.1111033
+      ],
+      [
+       17.0305008,
+       51.1110672
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 5"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0327901,
+       51.1103437
+      ],
+      [
+       17.0329332,
+       51.1103437
+      ],
+      [
+       17.0329332,
+       51.1103798
+      ],
+      [
+       17.0327901,
+       51.1103798
+      ],
+      [
+       17.0327901,
+       51.1103437
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "layer": "obstacles",
+    "name": "krzew 6"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       17.0316311,
+       51.1100362
+      ],
+      [
+       17.0318028,
+       51.1100362
+      ],
+      [
+       17.0318028,
+       51.1100723
+      ],
+      [
+       17.0316311,
+       51.1100723
+      ],
+      [
+       17.0316311,
+       51.1100362
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -204,6 +204,14 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <div class="field"><label for="geoFix" title="Łączenie rozłącznych kawałków (do 50 m), ścieżek równoległych (3 m), skrzyżowań (6 m) i ślepych końców (25 m), jak w PD">Popraw sieć z OSM</label>
       <input type="checkbox" id="geoFix" checked></div>
     <p class="hint" id="geoInfo" data-noi18n>Brak pliku – użyta będzie syntetyczna sieć parkowa. Wczytaj <code>includes/gis/drogi.geojson</code>, żeby odtworzyć park.</p>
+    <details class="hint file-spec"><summary>Format pliku i przykład</summary>
+      <ul class="plain">
+        <li>Ścieżki to linie (LineString, MultiLineString); inne geometrie (np. poligony krzewów) są pomijane.</li>
+        <li>Linie muszą kończyć się na skrzyżowaniach: odcinek między dwoma skrzyżowaniami to osobna linia (w QGIS: Wektor → Narzędzia geometrii → Podziel liniami). Linie, które się tylko przecinają, nie tworzą skrzyżowania.</li>
+        <li>Współrzędne w metrach (dowolny układ płaski, np. EPSG:2180) albo w stopniach (WGS 84). „Popraw sieć z OSM” łączy rozłączne kawałki i upraszcza sieć.</li>
+      </ul>
+      <a href="przyklad_park.geojson" download>Pobierz przykładowy plik (GeoJSON z siecią ścieżek)</a>
+    </details>
     <div class="field wide"><label for="parkSel">Park z OSM</label>
       <select id="parkSel">
         <option>Park Staszica</option>
@@ -241,6 +249,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
   <div class="results">
     <div class="try-banner" id="tryBanner" hidden data-noi18n></div>
     <div id="messages"></div>
+    <div class="scope-note"><p>Model badawczy: sprawdza spójność założeń teorii kooperacji, nie przewiduje zachowań ludzi ani nie ocenia projektu parku. Wynik jest względny: porównuj warianty przy tych samych założeniach. Więcej w zakładce „O modelu”.</p></div>
     <p class="sr-only" id="mapLive" data-noi18n></p>
     <dl class="stats" id="stats"></dl>
     <div class="displays">
@@ -412,6 +421,13 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <h2>O modelu</h2>
     <h3>Czym jest model</h3>
     <p>SIPD (Spatial Iterated Prisoner's Dilemma) to model agentowy spotkań w parku. Agenci chodzą po sieci ścieżek, a gdy znajdą się blisko siebie, spotykają się i rozgrywają rundę gry w dylemat więźnia. Model pozwala sprawdzić, jak wielkość parku, układ ścieżek i sposób poruszania się wpływają na to, kto kogo spotyka ponownie, oraz czy reguły kooperacji znane z teorii gier działają razem w przestrzeni.</p>
+    <h3>Zakres stosowania</h3>
+    <ul class="plain">
+      <li>SIPD jest modelem badawczym. Sprawdza, czy regularności kooperacji z teorii gier (stały udział oszustów, przetrwanie altruistów, limit Dunbara, reguła Hamiltona) pozostają spójne, gdy działają razem w przestrzeni parku. Nie przewiduje zachowań konkretnych ludzi.</li>
+      <li>Wyniki nie są oceną bezpieczeństwa, jakości ani zgodności projektu parku z przepisami.</li>
+      <li>Wynik jest względny: ma sens porównanie wariantów (układ sieci, parametry) przy tych samych założeniach i seedach.</li>
+      <li>Strona sprawdza zgodność tego portu z modelem GAMA (zakładka GAMA). Założenia modelu i ich źródła opisują publikacje o modelu, nie ta strona.</li>
+    </ul>
     <h3>Jak działa</h3>
     <ul class="plain">
       <li>Agenci idą wzdłuż ścieżek ze stałą prędkością. Spacerowicz na każdym skrzyżowaniu wybiera losowo kolejną ścieżkę.</li>
@@ -1059,6 +1075,22 @@ function buildSimDownloads() {
   c.addEventListener("click", () => { if (lastConfig) UX.downloadJSON("config.json", Object.assign({}, lastConfig,
     { cycle_at_download: snap ? snap.cycle : 0, params_changed_during_run: liveChanged })); });
   box.append(c);
+  // wydruk: wyniki z zakładki Symulacja i ustawienia przebiegu
+  const pr = document.createElement("button"); pr.className = "btn"; pr.disabled = true;
+  const prLabel = () => { pr.textContent = L("Drukuj / PDF", "Print / PDF"); };
+  prLabel(); I18N.onChange(prLabel);
+  box.append(pr);
+  UX.printButton(pr, document.querySelector('section[data-panel="sim"] > .results'), () => {
+    const cfg = lastConfig || simConfig();
+    return {
+      title: L("SIPD – podsumowanie przebiegu", "SIPD – run summary"),
+      note: L("Model badawczy: sprawdza spójność założeń teorii kooperacji, nie przewiduje zachowań ludzi ani nie ocenia projektu parku. Wynik jest względny.",
+        "A research model: it checks the consistency of assumptions of cooperation theory; it does not predict people's behaviour or assess the park design. The result is relative."),
+      rows: [[L("sieć", "network"), String(cfg.network)], ["seed", cfg.seed || L("losowy", "random")], [L("cykl", "cycle"), String(snap ? snap.cycle : 0)],
+        [L("wersja modelu", "model version"), cfg.model_version || "–"], [L("zmiany w trakcie", "changed during run"), liveChanged ? L("tak", "yes") : L("nie", "no")],
+        ...Object.entries(cfg.params).map(([k, v]) => [k, UX.fmtValue(v)])],
+    };
+  });
 }
 
 // ---------- batch ----------
@@ -1265,7 +1297,7 @@ async function useGeo(text, name, fix) {
 $("geoFile").addEventListener("change", async (ev) => {
   const f = ev.target.files[0]; if (!f || !py) return;
   try { await useGeo(await f.text(), f.name.replace(/\.(geo)?json$/i, ""), $("geoFix").checked); }
-  catch (e) { geoState = null; $("geoInfo").textContent = L("Błąd pliku ", "Error in file ") + f.name + ": " + pyError(e); }
+  catch (e) { geoState = null; $("geoInfo").textContent = UX.fileError(e, f.name); }
 });
 $("geoFix").addEventListener("change", () => {
   // ponownie wczytaj wybrany plik z nowym ustawieniem poprawek
@@ -1444,7 +1476,7 @@ $("zoneFile").addEventListener("change", async (ev) => {
       geometry: { type: "Point", coordinates: x.geometry.type === "Point" ? x.geometry.coordinates : centroid(x.geometry.coordinates) } }));
     if (!out.length) throw new Error("brak geometrii");
     useZones({ type: "FeatureCollection", features: out }, [f.name, f.name]);
-  } catch (e) { zoneInfo("Błąd pliku " + f.name + ": " + e.message, "Error in file " + f.name + ": " + e.message); }
+  } catch (e) { const m = UX.fileError(e, f.name); zoneInfo(m, m); }
 });
 $("btnSaveZones").addEventListener("click", () => {
   let text = ZONES ? JSON.stringify(ZONES, null, 1) : (hasModel ? py.globals.get("_zones_geojson")() : "");
@@ -1718,11 +1750,12 @@ function parkGroups() {
 function renderParks() {
   if (!parksRes) return;
   const groups = parkGroups();
-  UX.groupTable($("vTable"), groups, REP_METRICS, parksRes.dens ? [{ pl: "agentów (compat_N)", en: "agents (compat_N)", get: (g) => String(g.N) }] : []);
-  $("vBox").hidden = !parksRes.res.length;
-  if ($("vBox").hidden) return;
   const sel = $("vMetric");
   if (!sel.options.length) { REP_METRICS.forEach((m) => sel.add(new Option(L(m.pl, m.en), m.key))); }
+  UX.groupTable($("vTable"), groups, REP_METRICS, parksRes.dens ? [{ pl: "agentów (compat_N)", en: "agents (compat_N)", get: (g) => String(g.N) }] : [],
+    { ref: REP_METRICS.find((m) => m.key === sel.value) || REP_METRICS[0] });
+  $("vBox").hidden = !parksRes.res.length;
+  if ($("vBox").hidden) return;
   [...sel.options].forEach((o) => { const m = REP_METRICS.find((x) => x.key === o.value); o.textContent = L(m.pl, m.en); });
   UX.boxPlot($("vCanvas"), groups.map((g) => ({ label: g.label.replace(/^Park /, ""), values: g.recs.map((r) => r[sel.value]) })),
     sel.options[sel.selectedIndex].textContent);
