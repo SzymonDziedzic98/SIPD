@@ -710,8 +710,11 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       }
       cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     });
+    const trS = t.insertRow();
+    [L("pewność: ", "certainty: ") + L(metrics[0].pl, metrics[0].en), ...res.map((r) => stability(r.map((x) => x[metrics[0].key])).text), ...(res.length === 2 ? [""] : [])]
+      .forEach((v, i) => { const td = trS.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     const p = document.createElement("p"); p.className = "hint";
-    p.textContent = L(`Powtórzenia z seedami ${seeds.join(", ")}; w kolumnie „wariant 2 > wariant 1” liczba par z tym samym seedem, w których drugi wariant dał większą wartość.`,
+    p.textContent = STAB_NOTE() + " " + L(`Powtórzenia z seedami ${seeds.join(", ")}; w kolumnie „wariant 2 > wariant 1” liczba par z tym samym seedem, w których drugi wariant dał większą wartość.`,
       `Replicates with seeds ${seeds.join(", ")}; the “variant 2 > variant 1” column counts the same-seed pairs in which the second variant gave a larger value.`);
     el.replaceChildren(t, p);
   }
@@ -727,7 +730,7 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
     let best = null;
     if (ref) groups.forEach((g) => { const a = vals(g, ref.key); if (a.length && (!best || mean(a) < best.m)) best = { g, m: mean(a), a }; });
     const head = ["", "n", ...extra.map((x) => L(x.pl, x.en)), ...metrics.map((m) => L(m.pl, m.en))];
-    if (ref) head.push(L("vs najniższa: ", "vs lowest: ") + L(ref.pl, ref.en));
+    if (ref) head.push(L("vs najniższa: ", "vs lowest: ") + L(ref.pl, ref.en), L("pewność", "certainty"));
     const tr0 = t.insertRow();
     head.forEach((h, i) => {
       const th = document.createElement("th"); th.className = "sortable" + (i ? " num" : "");
@@ -750,14 +753,15 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
           const pct = best.m ? "+" + ((mean(a) - best.m) / Math.abs(best.m) * 100).toFixed(0) + "%" : "+" + n(mean(a) - best.m);
           cells.push(pct + (p === null ? "" : " · p " + (p < 0.001 ? "< 0.001" : "= " + p.toFixed(3)) + (p < 0.05 ? " *" : "")));
         }
+        cells.push(stability(a).text);
       }
       cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     });
     el.replaceChildren(t);
     if (ref) {
       const note = document.createElement("p"); note.className = "hint";
-      note.textContent = L("* różnica istotna przy p < 0,05 (test t Welcha względem grupy o najniższej średniej, bez poprawki na wiele porównań; wymaga co najmniej 2 seedów w grupie). Kliknij nagłówek kolumny, żeby posortować.",
-        "* difference significant at p < 0.05 (Welch t test against the group with the lowest mean, no correction for multiple comparisons; needs at least 2 seeds per group). Click a column header to sort.");
+      note.textContent = L("* różnica istotna przy p < 0,05 (test t Welcha względem grupy o najniższej średniej, bez poprawki na wiele porównań; wymaga co najmniej 2 seedów w grupie). Kliknij nagłówek kolumny, żeby posortować. ",
+        "* difference significant at p < 0.05 (Welch t test against the group with the lowest mean, no correction for multiple comparisons; needs at least 2 seeds per group). Click a column header to sort. ") + STAB_NOTE();
       el.append(note);
     }
     sortRows();
@@ -769,6 +773,39 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       rows.sort((a, b) => (s.i === 0 ? a.cells[0].textContent.localeCompare(b.cells[0].textContent, "pl") : num(a) - num(b)) * (s.dir === "ascending" ? 1 : -1));
       rows.forEach((r) => r.parentNode.append(r));
     }
+  }
+
+  // ---------- ile powtórzeń: stabilizacja średniej (CV wg Lee i in. 2015, JASSS 18(4) 4) ----------
+  // values w kolejności seedów; half = połowa 95% przedziału średniej względem średniej,
+  // stable = CV z ostatnich trzech liczności różni się od końcowego o mniej niż 10%, need = seedy do ±10%
+  const T975 = [0, 12.71, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.16, 2.145, 2.131,
+    2.12, 2.11, 2.101, 2.093, 2.086, 2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042];
+  function stability(values) {
+    const a = values.filter((v) => typeof v === "number" && isFinite(v)), n = a.length;
+    if (n < 2) return { n, ok: false, text: "–" };
+    const m = mean(a), s = sd(a);
+    if (s === 0) return { n, ok: true, text: L("stała ✓", "constant ✓") };
+    if (m === 0) return { n, ok: false, text: L("średnia 0", "mean 0") };
+    const cv = s / Math.abs(m), half = (T975[Math.min(n - 1, 30)] || 1.96) * cv / Math.sqrt(n);
+    const cvs = []; for (let k = 2; k <= n; k++) { const b = a.slice(0, k), mb = mean(b); cvs.push(mb ? sd(b) / Math.abs(mb) : Infinity); }
+    const stable = n >= 4 && cvs.slice(-3).every((c) => Math.abs(c - cv) <= 0.1 * cv);
+    const need = Math.max(2, Math.ceil((1.96 * cv / 0.1) ** 2));
+    const ok = stable && half <= 0.1;
+    const pct = "±" + (half * 100).toFixed(0) + "%";
+    return { n, cv, half, stable, need, ok,
+      text: ok ? pct + " ✓" : pct + " · " + (need > n ? L(`~${need} seedów`, `~${need} seeds`) : L("CV jeszcze się zmienia", "CV still changing")) };
+  }
+  const STAB_NOTE = () => L("Pewność: połowa 95% przedziału ufności średniej względem średniej. ✓ = przedział węższy niż ±10% i współczynnik zmienności (CV) stabilny przy ostatnich seedach (Lee i in. 2015); w przeciwnym razie przybliżona liczba seedów potrzebna do ±10%, n ≈ (1,96·CV/0,1)².",
+    "Certainty: half of the 95% confidence interval of the mean relative to the mean. ✓ = interval narrower than ±10% and the coefficient of variation (CV) stable over the last seeds (Lee et al. 2015); otherwise the approximate number of seeds needed for ±10%, n ≈ (1.96·CV/0.1)².");
+  // groups: [{ label, values }] – mała tabela pewności pod wykresem
+  function stabilityTable(el, groups, metricLabel) {
+    const t = document.createElement("table"); t.className = "cmp-table";
+    const tr0 = t.insertRow();
+    ["", "n", L("pewność: ", "certainty: ") + metricLabel].forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    groups.forEach((g) => { const st = stability(g.values), tr = t.insertRow();
+      [g.label, String(st.n), st.text].forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; }); });
+    const p = document.createElement("p"); p.className = "hint"; p.textContent = STAB_NOTE();
+    el.replaceChildren(t, p);
   }
 
   // test t Welcha (dwustronny); null, gdy w którejś grupie jest mniej niż 2 wartości
@@ -1175,6 +1212,6 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
 
   return { fileInputs, disabledHint, emptyNote, ready, loadFailed, settings, copy, paramHelp, fmtValue,
     basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON,
-    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, welchP, fileError, printButton, mean, sd, tour, mobileTabs, runBar, gallery,
+    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, stability, stabilityTable, welchP, fileError, printButton, mean, sd, tour, mobileTabs, runBar, gallery,
     a11y, background, heatmap, heatFrom, tryLink, tryFromURL, linkButton, offline };
 })();

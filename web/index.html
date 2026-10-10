@@ -321,6 +321,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <h2>Rozkład wyniku w wariantach</h2>
       <div class="controls"><select id="bBoxMetric" aria-label="Wynik na wykresie" data-nosort></select></div>
       <canvas id="bBoxCanvas"></canvas>
+      <div class="table-wrap" id="bStab"></div>
     </div>
     <div class="box-plot" id="bHeatBox" hidden>
       <h2>Mapa ciepła: dwa zmieniane parametry</h2>
@@ -448,6 +449,9 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
       <li>Wynik jest względny: ma sens porównanie wariantów (układ sieci, parametry) przy tych samych założeniach i seedach.</li>
       <li>Strona sprawdza zgodność tego portu z modelem GAMA (zakładka GAMA). Założenia modelu i ich źródła opisują publikacje o modelu, nie ta strona.</li>
     </ul>
+    <h3>Ile powtórzeń wystarczy</h3>
+    <p>Model jest losowy, więc jeden przebieg nie wystarcza do oceny układu. Uruchom ten sam wariant z kilkoma seedami i sprawdź kolumnę „pewność” w tabelach porównań i pod wykresem przeglądu wsadowego. Pewność to połowa 95% przedziału ufności średniej wyrażona jako procent średniej. Strona sprawdza też, czy współczynnik zmienności (CV, odchylenie standardowe podzielone przez średnią) przestał się zmieniać przy ostatnich seedach, zgodnie z podejściem Lee i in. (2015). Znak ✓ oznacza przedział węższy niż ±10% i stabilny CV. W przeciwnym razie strona podaje przybliżoną liczbę seedów potrzebną do ±10%: n ≈ (1,96·CV/0,1)². Warianty porównuj przy tych samych seedach.</p>
+    <p class="hint" data-noi18n>Lee, J.-S., Filatova, T., Ligmann-Zielinska, A., Hassani-Mahmooei, B., Stonedahl, F., Lorscheid, I., Voinov, A., Polhill, J. G., Sun, Z., Parker, D. C. (2015). The complexities of agent-based modeling output analysis. Journal of Artificial Societies and Social Simulation 18(4), 4.</p>
     <h3>Jak działa</h3>
     <ul class="plain">
       <li>Agenci idą wzdłuż ścieżek ze stałą prędkością. Spacerowicz na każdym skrzyżowaniu wybiera losowo kolejną ścieżkę.</li>
@@ -1245,7 +1249,9 @@ function renderBox() {
     if (!groups.has(g)) groups.set(g, []);
     if (typeof r[j] === "number") groups.get(g).push(r[j]);
   });
-  UX.boxPlot($("bBoxCanvas"), [...groups].map(([label, values]) => ({ label, values })), sel.value);
+  const bg = [...groups].map(([label, values]) => ({ label, values }));
+  UX.boxPlot($("bBoxCanvas"), bg, sel.value);
+  UX.stabilityTable($("bStab"), bg, sel.value);
   // S: dwa zmieniane parametry -> mapa ciepła średniej
   $("bHeatBox").hidden = vary.length !== 2;
   if (vary.length === 2) {
