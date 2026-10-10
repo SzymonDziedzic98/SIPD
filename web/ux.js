@@ -128,12 +128,12 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       const lab = inp.id && document.querySelector(`label[for="${inp.id}"]`);
       if (lab) { btn.setAttribute("aria-describedby", inp.id + "_name"); name.id = inp.id + "_name"; }
       const render = () => {
-        const f = inp.files && inp.files[0];
-        btn.textContent = L("Wybierz plik…", "Choose file…");
+        const f = inp.files && inp.files[0], k = inp.files ? inp.files.length : 0;
+        btn.textContent = inp.multiple ? L("Wybierz pliki…", "Choose files…") : L("Wybierz plik…", "Choose file…");
         if (lab) btn.setAttribute("aria-label", lab.textContent + ": " + btn.textContent);
-        name.textContent = f ? f.name : L("nie wybrano pliku", "no file chosen");
+        name.textContent = k > 1 ? L(`${k} plików`, `${k} files`) : f ? f.name : L("nie wybrano pliku", "no file chosen");
         name.classList.toggle("chosen", !!f);
-        name.title = f ? f.name : "";
+        name.title = k ? [...inp.files].map((x) => x.name).join(", ") : "";
       };
       inp.addEventListener("change", render);
       relabels.push(render);
