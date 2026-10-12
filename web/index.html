@@ -162,7 +162,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 
 <header class="top">
   <h1>SIPD – przestrzenny dylemat więźnia</h1>
-  <p>Port modelu <code>PD.gaml</code> do Pythona, uruchamiany w przeglądarce. Parametry z oznaczeniem ↻ działają po ponownej inicjalizacji.</p>
+  <p>Port modelu <code>SIPD.gaml</code> do Pythona, uruchamiany w przeglądarce. Parametry z oznaczeniem ↻ działają po ponownej inicjalizacji.</p>
   <div class="status" id="status"><span>cykl</span> <b id="stCycle">–</b> · <span>gier</span> <b id="stGames">–</b> · <span>sieć</span> <b id="stNet">–</b></div>
   <button type="button" class="btn small" id="btnTour">Samouczek</button>
   <a class="btn small" href="modele.html" id="lnkModels">Modele doktoratu</a>
@@ -293,7 +293,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 <!-- BATCH -->
 <section data-panel="batch" hidden>
   <div class="panel">
-    <h2>Eksperymenty batch z PD.gaml</h2>
+    <h2>Eksperymenty batch z SIPD.gaml</h2>
     <p class="hint">Oryginalne ustawienia to 30 powtórzeń × 50 000 cykli, co w przeglądarce zajmie bardzo długo. Domyślnie skracam je poniżej; wpisz pełne wartości, jeśli chcesz odtworzyć eksperyment wiernie.</p>
     <div class="controls">
       <div class="field"><label for="bExp">Eksperyment</label><select id="bExp"></select></div>
@@ -347,7 +347,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
 <section data-panel="gama" hidden>
   <div class="panel">
     <h2>Obliczenia w GAMA</h2>
-    <p class="hint">GAMA nie działa w przeglądarce. Strona przygotowuje model <code>PD.gaml</code> z ustawieniami i siecią z zakładki Symulacja, a wyniki z GAMA pokazuje obok Pythona z tymi samymi ustawieniami i seedami. Potrzebna jest GAMA 2025.6.</p>
+    <p class="hint">GAMA nie działa w przeglądarce. Strona przygotowuje model <code>SIPD.gaml</code> z ustawieniami i siecią z zakładki Symulacja, a wyniki z GAMA pokazuje obok Pythona z tymi samymi ustawieniami i seedami. Potrzebna jest GAMA 2025.6.</p>
     <div class="controls" role="radiogroup" aria-label="Sposób liczenia w GAMA">
       <label class="radio"><input type="radio" name="gMode" value="pkg" checked> Pakiet: GAMA uruchamiasz sam</label>
       <label class="radio"><input type="radio" name="gMode" value="server"> Połączenie z GAMA na tym komputerze</label>
@@ -442,7 +442,7 @@ code { font-family: var(--font-mono); font-size: 12.5px; }
     <p class="hint">Każdy przycisk wczytuje park z biblioteki, ustawia rdzeń zgodności (strategie klasyczne, ruch losowy po sieci, zasięg 30 m, prędkość 2 m na cykl), inicjalizuje model z seedem 1 i uruchamia go do 3000 cykli. Po pierwszym wariancie uruchom drugi: oba pojawią się na wykresie porównania w zakładce Symulacja.</p>
     <div class="try-list" id="tryList" data-noi18n></div>
     <h3>Co odwzorowuje ten port</h3>
-    <p>Plik <code>sipd.py</code> zawiera cały model z <code>models/PD.gaml</code>: sieć ścieżek, siatkę komórek z polem disorder, 9 charakterów, Q-learning per przeciwnik ze stanami RISKY/SAFE, pamięć społeczną i środowiskową, efekt rozbitej szyby, kotwicę charakteru, ograniczenie gier (height), limit Dunbara, typ gry, klasyczny start od C, metryki, eksporty CSV, eksperymenty batch i testy.</p>
+    <p>Plik <code>sipd.py</code> zawiera cały model z <code>models/SIPD.gaml</code>: sieć ścieżek, siatkę komórek z polem disorder, 9 charakterów, Q-learning per przeciwnik ze stanami RISKY/SAFE, pamięć społeczną i środowiskową, efekt rozbitej szyby, kotwicę charakteru, ograniczenie gier (height), limit Dunbara, typ gry, klasyczny start od C, metryki, eksporty CSV, eksperymenty batch i testy.</p>
     <h3>Różnice względem GAMA</h3>
     <ul class="plain">
       <li>Inny generator liczb losowych: wyniki zgadzają się statystycznie, nie liczba w liczbę. W obrębie tej wersji ten sam seed daje te same wyniki.</li>
@@ -1774,7 +1774,7 @@ UX.disabledHint("vDl", "Najpierw porównaj parki.", "Compare the parks first.");
 I18N.onChange(renderParks);
 
 // ---------- GAMA: pakiet do uruchomienia u siebie i połączenie z serwerem GAMA ----------
-// Model GAML z ustawieniami strony buduje web/gama_export.py (kopia models/PD.gaml z podmienionymi wartościami
+// Model GAML z ustawieniami strony buduje web/gama_export.py (kopia models/SIPD.gaml z podmienionymi wartościami
 // zmiennych globalnych, sieć w SHP). Wyniki GAMA (z pliku albo z serwera) strona zestawia z Pythonem: te same
 // ustawienia, sieć i seedy.
 const G_METRICS = [
@@ -1793,10 +1793,10 @@ async function gamaSource() {
   if (GM.src) return GM.src;
   let src = null;
   // GitHub Pages: model obok strony; lokalnie (serwer w katalogu repozytorium): ../models/
-  for (const url of ["PD.gaml", "../models/PD.gaml"]) {
+  for (const url of ["SIPD.gaml", "../models/SIPD.gaml"]) {
     try { const r = await fetch(url, { cache: "no-cache" }); if (r.ok) { src = await r.text(); break; } } catch (e) { /* następny adres */ }
   }
-  if (!src) throw new Error(L("nie znaleziono pliku PD.gaml obok strony", "PD.gaml was not found next to the page"));
+  if (!src) throw new Error(L("nie znaleziono pliku SIPD.gaml obok strony", "SIPD.gaml was not found next to the page"));
   const r = await fetch("gama_export.py", { cache: "no-cache" });
   if (!r.ok) throw new Error("gama_export.py: HTTP " + r.status);
   py.FS.writeFile("gama_export.py", await r.text());
@@ -1838,7 +1838,7 @@ async function gamaBuild(zip) {
   const src = await gamaSource();
   const seeds = gamaSeeds();
   if (!seeds.length) throw new Error(L("podaj seedy, np. 1, 2, 3 albo 1-10", "enter seeds, e.g. 1, 2, 3 or 1-10"));
-  const meta = { model: "SIPD", model_file: "PD.gaml", python_model_version: MODEL_HASH, network: gamaNetLabel(),
+  const meta = { model: "SIPD", model_file: "SIPD.gaml", python_model_version: MODEL_HASH, network: gamaNetLabel(),
     app: location.origin + location.pathname, saved: new Date().toISOString() };
   let res;
   try {
