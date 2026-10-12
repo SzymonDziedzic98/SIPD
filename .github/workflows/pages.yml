@@ -5,7 +5,7 @@ name: Strona SIPD (GitHub Pages)
 on:
   push:
     branches: [main, feature/gamadays-compat]
-    paths: ["web/**", "models/PD.gaml", ".github/workflows/pages.yml"]
+    paths: ["web/**", "models/SIPD.gaml", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
       - name: Testy modelu (python web/sipd.py --test)
         run: python3 web/sipd.py --test
       - name: Model GAML obok strony (zakładka GAMA)
-        run: cp models/PD.gaml web/PD.gaml
+        run: cp models/SIPD.gaml web/SIPD.gaml
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
