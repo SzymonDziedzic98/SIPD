@@ -68,11 +68,33 @@ kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--
 }
 .run-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .run-bar > .controls { margin: 0; }
-.run-status { display: none; flex: 1 1 0; min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-status { display: none; flex: 1 1 0; min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; color: var(--muted); overflow: hidden; }
 @media (max-width: 860px) {
   .run-bar { position: sticky; top: 0; z-index: 10; background: var(--ground); border-bottom: 1px solid var(--line); margin-inline: -16px; padding: 6px 16px; }
-  .run-status { display: block; }
+  /* do dwóch linii zamiast ucinania podpisu */
+  .run-status { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; flex-basis: 100%; order: 1; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+  .run-bar > .mobile-tabs { order: 2; }
   .run-bar > .mobile-tabs { flex-basis: 100%; }
+}
+.scope-note { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 0 0 10px; font-size: 12.5px; color: var(--ink); }
+.scope-note p { margin: 0; }
+.cmp-table th.sortable { cursor: pointer; user-select: none; }
+.cmp-table th.sortable button { all: unset; cursor: pointer; }
+.cmp-table th.sortable button:focus-visible { outline: 2px solid var(--focus); }
+.cmp-table th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 9px; }
+.cmp-table th[aria-sort="descending"] button::after { content: " ▼"; font-size: 9px; }
+.btn.keep-cta { outline: 2px solid var(--focus); outline-offset: 1px; }
+.print-only { display: none; }
+.print-only table { border-collapse: collapse; font-size: 10px; margin-top: 6px; }
+.print-only td { border: 1px solid #999; padding: 2px 6px; vertical-align: top; }
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  nav, nav.tabs, aside.params, .run-bar, .mobile-tabs, .controls, .btn, .tour-hole, .tour-tip, .try-banner, .png-btn,
+  section[data-panel]:not([data-panel="sim"]), header .lang, .scope-note { display: none !important; }
+  section[data-panel="sim"] { display: block !important; }
+  section[data-panel="sim"] > .results { display: block !important; }
+  .print-only { display: block !important; margin-bottom: 12px; }
+  .panel, figure.display { break-inside: avoid; }
 }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
 .gallery button { border: 1px solid var(--line); background: var(--ground); border-radius: 6px; padding: 4px; cursor: pointer; display: grid; gap: 2px; text-align: left; font-size: 11px; color: var(--muted); }
@@ -106,12 +128,12 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       const lab = inp.id && document.querySelector(`label[for="${inp.id}"]`);
       if (lab) { btn.setAttribute("aria-describedby", inp.id + "_name"); name.id = inp.id + "_name"; }
       const render = () => {
-        const f = inp.files && inp.files[0];
-        btn.textContent = L("Wybierz plik…", "Choose file…");
+        const f = inp.files && inp.files[0], k = inp.files ? inp.files.length : 0;
+        btn.textContent = inp.multiple ? L("Wybierz pliki…", "Choose files…") : L("Wybierz plik…", "Choose file…");
         if (lab) btn.setAttribute("aria-label", lab.textContent + ": " + btn.textContent);
-        name.textContent = f ? f.name : L("nie wybrano pliku", "no file chosen");
+        name.textContent = k > 1 ? L(`${k} plików`, `${k} files`) : f ? f.name : L("nie wybrano pliku", "no file chosen");
         name.classList.toggle("chosen", !!f);
-        name.title = f ? f.name : "";
+        name.title = k ? [...inp.files].map((x) => x.name).join(", ") : "";
       };
       inp.addEventListener("change", render);
       relabels.push(render);
@@ -378,8 +400,8 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
     const fmt = (v) => (v === undefined || v === null ? "–" : typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v));
     function labels() {
       h.textContent = L("Porównanie dwóch przebiegów", "Compare two runs");
-      hint.textContent = L("Zapamiętaj przebieg (np. wariant bazowy), zmień ustawienia, kliknij Inicjalizuj i uruchom. Zapamiętany przebieg jest linią przerywaną.",
-        "Keep a run (e.g. the baseline), change the settings, click Initialise and run. The kept run is the dashed line.");
+      hint.textContent = L("Wartości same w sobie nie mówią, czy wynik jest dobry: ma sens porównanie wariantów. Zapamiętaj przebieg (np. wariant bazowy), zmień ustawienia, kliknij Inicjalizuj i uruchom. Zapamiętany przebieg jest linią przerywaną, a kolumna „zmiana” podaje różnicę względem niego.",
+        "The values alone do not say whether a result is good: what makes sense is comparing variants. Keep a run (e.g. the baseline), change the settings, click Initialise and run. The kept run is the dashed line, and the “change” column gives the difference from it.");
       keep.textContent = L("Zapamiętaj ten przebieg", "Keep this run");
       clear.textContent = L("Wyczyść", "Clear");
       sel.setAttribute("aria-label", L("Miara na wykresie", "Measure on the chart"));
@@ -388,6 +410,7 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       sel.value = v || metrics[0].key;
       keep.disabled = !(cur && cur.pts.length);
       clear.disabled = !base;
+      ctaKeep();
       draw(); table();
     }
     function draw() {
@@ -410,20 +433,31 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       chart.options.scales.y.title.text = L(metric().pl, metric().en);
       chart.update("none");
     }
+    // przycisk „Zapamiętaj” wyróżniony, dopóki nie ma przebiegu odniesienia
+    function ctaKeep() {
+      const on = !base && !keep.disabled;
+      keep.classList.toggle("primary", on); keep.classList.toggle("keep-cta", on);
+    }
+    const change = (b, c) => (typeof b === "number" && typeof c === "number" && b !== 0
+      ? (c >= b ? "+" : "−") + Math.abs((c - b) / Math.abs(b) * 100).toFixed(Math.abs((c - b) / b) < 0.1 ? 1 : 0) + "%" : "–");
     function table() {
       const last = (r) => (r && r.pts.length ? r.pts[r.pts.length - 1] : null);
       const lb = last(base), lc = last(cur);
       const t = document.createElement("table"); t.className = "cmp-table";
       const head = [L("miara", "measure"), base ? base.label : L("zapamiętany", "kept"), cur ? cur.label : L("bieżący", "current")];
+      if (lb && lc) head.push(L("zmiana", "change"));
       t.innerHTML = "<tr>" + head.map((x, i) => `<th${i ? ' class="num"' : ""}></th>`).join("") + "</tr>";
       [...t.rows[0].cells].forEach((c, i) => { c.textContent = head[i]; });
       metrics.forEach((m) => {
         const tr = t.insertRow();
-        [L(m.pl, m.en), lb ? fmt(lb.v[m.key]) : "–", lc ? fmt(lc.v[m.key]) : "–"].forEach((v, i) => {
+        const row = [L(m.pl, m.en), lb ? fmt(lb.v[m.key]) : "–", lc ? fmt(lc.v[m.key]) : "–"];
+        if (lb && lc) row.push(change(lb.v[m.key], lc.v[m.key]));
+        row.forEach((v, i) => {
           const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono";
         });
       });
       const cyc = [L("cykl", "cycle"), lb ? lb.x : "–", lc ? lc.x : "–"];
+      if (lb && lc) cyc.push("");
       const tr = t.insertRow(); cyc.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
       tw.replaceChildren(t);
       if (base && cur) {
@@ -445,7 +479,7 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
         if (!cur) return;
         const p = cur.pts;
         if (p.length && p[p.length - 1].x === x) p[p.length - 1].v = values; else p.push({ x, v: values });
-        keep.disabled = false;
+        keep.disabled = false; ctaKeep();
         if (!pending) { pending = true; setTimeout(() => { pending = false; draw(); table(); }, 300); }
       },
       keep() { if (cur && cur.pts.length) { base = { ...cur, label: cur.label + L(" (zapamiętany)", " (kept)") }; labels(); } },
@@ -676,34 +710,187 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       }
       cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     });
+    const trS = t.insertRow();
+    [L("pewność: ", "certainty: ") + L(metrics[0].pl, metrics[0].en), ...res.map((r) => stability(r.map((x) => x[metrics[0].key])).text), ...(res.length === 2 ? [""] : [])]
+      .forEach((v, i) => { const td = trS.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     const p = document.createElement("p"); p.className = "hint";
-    p.textContent = L(`Powtórzenia z seedami ${seeds.join(", ")}; w kolumnie „wariant 2 > wariant 1” liczba par z tym samym seedem, w których drugi wariant dał większą wartość.`,
+    p.textContent = STAB_NOTE() + " " + L(`Powtórzenia z seedami ${seeds.join(", ")}; w kolumnie „wariant 2 > wariant 1” liczba par z tym samym seedem, w których drugi wariant dał większą wartość.`,
       `Replicates with seeds ${seeds.join(", ")}; the “variant 2 > variant 1” column counts the same-seed pairs in which the second variant gave a larger value.`);
     el.replaceChildren(t, p);
   }
 
   // ---------- V: zestawienie grup (np. parków) ----------
   // groups: [{ label, recs: [{miary}] }]; wiersz = grupa, kolumny = n, dodatkowe kolumny i średnia ± SD miar
-  function groupTable(el, groups, metrics, extra = []) {
+  // opts.ref: { key, pl, en } – kolumna z różnicą względem grupy o najniższej średniej tej miary i p testu Welcha
+  function groupTable(el, groups, metrics, extra = [], opts = {}) {
     const t = document.createElement("table"); t.className = "cmp-table";
     const n = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+    const vals = (g, k) => g.recs.map((r) => r[k]).filter((v) => typeof v === "number");
+    const ref = opts.ref;
+    let best = null;
+    if (ref) groups.forEach((g) => { const a = vals(g, ref.key); if (a.length && (!best || mean(a) < best.m)) best = { g, m: mean(a), a }; });
     const head = ["", "n", ...extra.map((x) => L(x.pl, x.en)), ...metrics.map((m) => L(m.pl, m.en))];
-    const tr0 = t.insertRow(); head.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    if (ref) head.push(L("vs najniższa: ", "vs lowest: ") + L(ref.pl, ref.en), L("pewność", "certainty"));
+    const tr0 = t.insertRow();
+    head.forEach((h, i) => {
+      const th = document.createElement("th"); th.className = "sortable" + (i ? " num" : "");
+      const b = document.createElement("button"); b.type = "button"; b.textContent = h; th.append(b);
+      b.addEventListener("click", () => { const s = el._sort; el._sort = { i, dir: s && s.i === i && s.dir === "ascending" ? "descending" : "ascending" }; sortRows(); });
+      tr0.append(th);
+    });
     // nagłówek kolumny grup tylko dla czytników ekranu
-    const c0 = document.createElement("span"); c0.className = "sr-only"; c0.textContent = L("Grupa", "Group"); tr0.cells[0].append(c0);
+    const c0 = document.createElement("span"); c0.className = "sr-only"; c0.textContent = L("Grupa", "Group"); tr0.cells[0].firstChild.append(c0);
     groups.forEach((g) => {
       const tr = t.insertRow();
       const cells = [g.label, String(g.recs.length), ...extra.map((x) => x.get(g)),
-        ...metrics.map((m) => { const a = g.recs.map((r) => r[m.key]).filter((v) => typeof v === "number"); return a.length ? n(mean(a)) + (a.length > 1 ? " ± " + n(sd(a)) : "") : "–"; })];
+        ...metrics.map((m) => { const a = vals(g, m.key); return a.length ? n(mean(a)) + (a.length > 1 ? " ± " + n(sd(a)) : "") : "–"; })];
+      if (ref) {
+        const a = vals(g, ref.key);
+        if (!best || !a.length) cells.push("–");
+        else if (g === best.g) cells.push(L("najniższa", "lowest"));
+        else {
+          const p = welchP(a, best.a);
+          const pct = best.m ? "+" + ((mean(a) - best.m) / Math.abs(best.m) * 100).toFixed(0) + "%" : "+" + n(mean(a) - best.m);
+          cells.push(pct + (p === null ? "" : " · p " + (p < 0.001 ? "< 0.001" : "= " + p.toFixed(3)) + (p < 0.05 ? " *" : "")));
+        }
+        cells.push(stability(a).text);
+      }
       cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; });
     });
     el.replaceChildren(t);
+    if (ref) {
+      const note = document.createElement("p"); note.className = "hint";
+      note.textContent = L("* różnica istotna przy p < 0,05 (test t Welcha względem grupy o najniższej średniej, bez poprawki na wiele porównań; wymaga co najmniej 2 seedów w grupie). Kliknij nagłówek kolumny, żeby posortować. ",
+        "* difference significant at p < 0.05 (Welch t test against the group with the lowest mean, no correction for multiple comparisons; needs at least 2 seeds per group). Click a column header to sort. ") + STAB_NOTE();
+      el.append(note);
+    }
+    sortRows();
+    function sortRows() {
+      const s = el._sort; if (!s || s.i >= t.rows[0].cells.length) return;
+      [...t.rows[0].cells].forEach((c, i) => { if (i === s.i) c.setAttribute("aria-sort", s.dir); else c.removeAttribute("aria-sort"); });
+      const num = (r) => { const x = parseFloat(r.cells[s.i].textContent.replace("−", "-")); return isNaN(x) ? (s.dir === "ascending" ? Infinity : -Infinity) : x; };
+      const rows = [...t.rows].slice(1);
+      rows.sort((a, b) => (s.i === 0 ? a.cells[0].textContent.localeCompare(b.cells[0].textContent, "pl") : num(a) - num(b)) * (s.dir === "ascending" ? 1 : -1));
+      rows.forEach((r) => r.parentNode.append(r));
+    }
+  }
+
+  // ---------- ile powtórzeń: stabilizacja średniej (CV wg Lee i in. 2015, JASSS 18(4) 4) ----------
+  // values w kolejności seedów; half = połowa 95% przedziału średniej względem średniej,
+  // stable = CV z ostatnich trzech liczności różni się od końcowego o mniej niż 10%, need = seedy do ±10%
+  const T975 = [0, 12.71, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.16, 2.145, 2.131,
+    2.12, 2.11, 2.101, 2.093, 2.086, 2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042];
+  function stability(values) {
+    const a = values.filter((v) => typeof v === "number" && isFinite(v)), n = a.length;
+    if (n < 2) return { n, ok: false, text: "–" };
+    const m = mean(a), s = sd(a);
+    if (s === 0) return { n, ok: true, text: L("stała ✓", "constant ✓") };
+    if (m === 0) return { n, ok: false, text: L("średnia 0", "mean 0") };
+    const cv = s / Math.abs(m), half = (T975[Math.min(n - 1, 30)] || 1.96) * cv / Math.sqrt(n);
+    const cvs = []; for (let k = 2; k <= n; k++) { const b = a.slice(0, k), mb = mean(b); cvs.push(mb ? sd(b) / Math.abs(mb) : Infinity); }
+    const stable = n >= 4 && cvs.slice(-3).every((c) => Math.abs(c - cv) <= 0.1 * cv);
+    const need = Math.max(2, Math.ceil((1.96 * cv / 0.1) ** 2));
+    const ok = stable && half <= 0.1;
+    const pct = "±" + (half * 100).toFixed(0) + "%";
+    return { n, cv, half, stable, need, ok,
+      text: ok ? pct + " ✓" : pct + " · " + (need > n ? L(`~${need} seedów`, `~${need} seeds`) : L("CV jeszcze się zmienia", "CV still changing")) };
+  }
+  const STAB_NOTE = () => L("Pewność: połowa 95% przedziału ufności średniej względem średniej. ✓ = przedział węższy niż ±10% i współczynnik zmienności (CV) stabilny przy ostatnich seedach (Lee i in. 2015); w przeciwnym razie przybliżona liczba seedów potrzebna do ±10%, n ≈ (1,96·CV/0,1)².",
+    "Certainty: half of the 95% confidence interval of the mean relative to the mean. ✓ = interval narrower than ±10% and the coefficient of variation (CV) stable over the last seeds (Lee et al. 2015); otherwise the approximate number of seeds needed for ±10%, n ≈ (1.96·CV/0.1)².");
+  // groups: [{ label, values }] – mała tabela pewności pod wykresem
+  function stabilityTable(el, groups, metricLabel) {
+    const t = document.createElement("table"); t.className = "cmp-table";
+    const tr0 = t.insertRow();
+    ["", "n", L("pewność: ", "certainty: ") + metricLabel].forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "num"; tr0.append(th); });
+    groups.forEach((g) => { const st = stability(g.values), tr = t.insertRow();
+      [g.label, String(st.n), st.text].forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (i) td.className = "num mono"; }); });
+    const p = document.createElement("p"); p.className = "hint"; p.textContent = STAB_NOTE();
+    el.replaceChildren(t, p);
+  }
+
+  // test t Welcha (dwustronny); null, gdy w którejś grupie jest mniej niż 2 wartości
+  function welchP(a, b) {
+    if (a.length < 2 || b.length < 2) return null;
+    const va = sd(a) ** 2 / a.length, vb = sd(b) ** 2 / b.length, d = mean(a) - mean(b);
+    if (va + vb === 0) return d === 0 ? 1 : 0;
+    const tt = d / Math.sqrt(va + vb);
+    const df = (va + vb) ** 2 / (va ** 2 / (a.length - 1) + vb ** 2 / (b.length - 1));
+    return ibeta(df / (df + tt * tt), df / 2, 0.5);
+  }
+  function lgamma(z) {
+    const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    let x = z, y = z, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp);
+    let ser = 1.000000000190015; for (const k of c) ser += k / ++y;
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+  function betacf(a, b, x) {
+    const TINY = 1e-300; let c = 1, d = 1 - (a + b) * x / (a + 1); if (Math.abs(d) < TINY) d = TINY; d = 1 / d; let h = d;
+    for (let m = 1; m <= 300; m++) {
+      const m2 = 2 * m;
+      let aa = m * (b - m) * x / ((a - 1 + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < TINY) d = TINY; c = 1 + aa / c; if (Math.abs(c) < TINY) c = TINY; d = 1 / d; h *= d * c;
+      aa = -(a + m) * (a + b + m) * x / ((a + m2) * (a + 1 + m2));
+      d = 1 + aa * d; if (Math.abs(d) < TINY) d = TINY; c = 1 + aa / c; if (Math.abs(c) < TINY) c = TINY; d = 1 / d;
+      const del = d * c; h *= del; if (Math.abs(del - 1) < 3e-12) break;
+    }
+    return h;
+  }
+  function ibeta(x, a, b) {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+    return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+
+  // ---------- błędy plików: komunikat po ludzku zamiast wyjątku Pythona ----------
+  function fileError(e, name) {
+    const m = String((e && e.message) || e);
+    console.warn(m);
+    const f = name ? "„" + name + "”" : "", fe = name ? "“" + name + "”" : "";
+    if (/nie ma ścieżek|nie zawiera linii|sieć ścieżek jest pusta/.test(m))
+      return L(`W pliku ${f} nie ma ścieżek. Ścieżki muszą być liniami (LineString lub MultiLineString), a plik zawiera tylko inne geometrie (np. poligony). Sprawdź, czy to plik ze ścieżkami.`,
+        `The file ${fe} has no paths. Paths must be lines (LineString or MultiLineString), but the file holds only other geometries (e.g. polygons). Check that this is the paths file.`);
+    if (/za krótki|zły nagłówek|\.shp/.test(m))
+      return L(`Plik ${f} nie jest poprawnym plikiem .shp. Wskaż główny plik warstwy z rozszerzeniem .shp (nie .shx ani .dbf) albo zapisz warstwę jako GeoJSON.`,
+        `The file ${fe} is not a valid .shp file. Choose the main layer file with the .shp extension (not .shx or .dbf) or save the layer as GeoJSON.`);
+    if (/JSONDecodeError|Expecting|Unterminated|Extra data|Invalid control|UnicodeDecodeError|not valid JSON|Unexpected token|JSON\.parse/.test(m))
+      return L(`Plik ${f} nie jest poprawnym plikiem GeoJSON. Zapisz warstwę w QGIS jako GeoJSON (Eksportuj → Zapisz obiekty jako…) i wczytaj ponownie; wzór jest w przykładowym pliku pod polem wyboru.`,
+        `The file ${fe} is not a valid GeoJSON file. Save the layer in QGIS as GeoJSON (Export → Save Features As…) and load it again; the sample file below the file field shows the format.`);
+    if (/AttributeError|KeyError|TypeError|IndexError|object has no attribute|brak geometrii/.test(m))
+      return L(`Plik ${f} nie ma oczekiwanej struktury GeoJSON (FeatureCollection z obiektami Feature i geometrią). Porównaj go z przykładowym plikiem pod polem wyboru.`,
+        `The file ${fe} does not have the expected GeoJSON structure (a FeatureCollection of Features with geometry). Compare it with the sample file below the file field.`);
+    return L(`Nie udało się odczytać pliku ${f}. Sprawdź format (opis i przykładowy plik pod polem wyboru).`,
+      `Could not read the file ${fe}. Check the format (description and sample file below the file field).`);
+  }
+
+  // ---------- wydruk / PDF podsumowania przebiegu ----------
+  // summary(): { title, note, rows: [[nazwa, wartość], ...] }; tylko na czas drukowania: tytuł i zastrzeżenie na górze wyników,
+  // tabela ustawień na końcu
+  function printButton(btn, host, summary) {
+    const top = document.createElement("div"), end = document.createElement("div");
+    top.className = end.className = "print-only";
+    const fill = () => {
+      const s = summary();
+      const h = document.createElement("h2"); h.textContent = s.title;
+      const meta = document.createElement("p"); meta.textContent = new Date().toLocaleString(I18N.lang === "en" ? "en-GB" : "pl-PL") + " · " + location.origin + location.pathname;
+      const note = document.createElement("p"); note.textContent = s.note;
+      top.replaceChildren(h, meta, note);
+      const h3 = document.createElement("h3"); h3.textContent = L("Ustawienia przebiegu", "Run settings");
+      const t = document.createElement("table");
+      s.rows.forEach(([k, v]) => { const tr = t.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; });
+      end.replaceChildren(h3, t);
+      host.prepend(top); host.append(end);
+    };
+    window.addEventListener("beforeprint", fill);
+    window.addEventListener("afterprint", () => { top.remove(); end.remove(); });
+    btn.addEventListener("click", () => { fill(); window.print(); });
   }
 
   // ---------- H: samouczek ----------
   // steps: [{ el: () => element, text: [pl, en] }]; pokazywany raz (klucz w localStorage), potem z przycisku
   function tour(key, steps, force) {
     try { if (!force && localStorage.getItem(key)) return; } catch (e) { if (!force) return; }
+    // na telefonie bez samoczynnego startu (nakładka zasłaniałaby wypełniane pole); jest przycisk „Samouczek”
+    if (!force && window.matchMedia("(max-width: 860px)").matches) return;
     const hole = document.createElement("div"); hole.className = "tour-hole";
     const tip = document.createElement("div"); tip.className = "tour-tip"; tip.setAttribute("role", "dialog");
     tip.setAttribute("aria-label", L("Samouczek", "Tutorial"));
@@ -729,9 +916,12 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
       ctr.append(next, skip); tip.append(p, ctr);
       const tw = Math.min(340, window.innerWidth - 32);
       let left = Math.min(Math.max(16, r.left), window.innerWidth - tw - 16);
+      Object.assign(tip.style, { left: left + "px", top: "0px" });
+      const th = tip.offsetHeight || 140;
       let top = r.bottom + 12;
-      if (top + 140 > window.innerHeight) top = Math.max(16, r.top - 150);
-      Object.assign(tip.style, { left: left + "px", top: top + "px" });
+      if (top + th > window.innerHeight - 8) top = r.top - th - 12;
+      if (top < 8) top = Math.max(8, window.innerHeight - th - 8);
+      tip.style.top = top + "px";
       next.focus({ preventScroll: true });
     }
     window.addEventListener("resize", show);
@@ -1022,6 +1212,6 @@ canvas.map:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px;
 
   return { fileInputs, disabledHint, emptyNote, ready, loadFailed, settings, copy, paramHelp, fmtValue,
     basicAdvanced, sliders: slidersFor, refresh, compare, shortcuts, tryCards, tryBanner, hashText, downloadJSON,
-    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, mean, sd, tour, mobileTabs, runBar, gallery,
+    scaleBar, savePNG, pngButtons, boxPlot, repTable, groupTable, stability, stabilityTable, welchP, fileError, printButton, mean, sd, tour, mobileTabs, runBar, gallery,
     a11y, background, heatmap, heatFrom, tryLink, tryFromURL, linkButton, offline };
 })();
