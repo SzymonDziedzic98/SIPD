@@ -140,6 +140,24 @@ DEFAULTS = {
     "rest_threshold": 0.3,             # poniżej tej energii agent idzie do najbliższej strefy
     "rest_recovery": 0.005,            # odzysk energii na cykl; przy prędkości 2 daje ok. 25% czasu w strefach
     "rest_target": 1.0,                # energia, przy której agent wstaje
+    # --- Profile wieku (Z1, Z2, Z13; działają tylko przy rest_on; wartości domyślne = model bez zmian) ---
+    # frail = starsi bez pomocy (ok. 350 m do odpoczynku), aided = z laską lub kulą (ok. 75 m)
+    "speed_factor_frail": 1.0,         # mnożnik prędkości frail (literatura: 0,75–0,9)
+    "aided_share": 0.0,                # udział aided (z tego samego losowania co frail; 0 = brak profilu)
+    "fatigue_aided_mean": 0.93,        # utrata energii na 100 m – aided
+    "fatigue_aided_sd": 0.2,
+    "speed_factor_aided": 1.0,         # mnożnik prędkości aided (literatura: ok. 0,7)
+    "dest_dwell_factor_frail": 1.0,    # Z2: mnożnik średniego pobytu w celu
+    "dest_dwell_factor_aided": 1.0,
+    "rest_recovery_frail": -1.0,       # Z2: odzysk energii na cykl; < 0 = rest_recovery
+    "rest_recovery_aided": -1.0,
+    "arrival_energy": "uniform",       # Z13: "uniform" = U(rest_threshold, 1) jak dotąd; "distance" = 1 - zmęczenie × droga
+    "arrival_dist_mean": 500.0,        # średnia droga z domu do parku (m, rozkład wykładniczy)
+    "arrival_dist_mean_frail": -1.0,   # < 0 = arrival_dist_mean
+    "arrival_dist_mean_aided": -1.0,
+    "arrival_transit_share": 0.0,      # udział przyjazdów komunikacją lub autem (droga arrival_transit_dist)
+    "arrival_transit_dist": 50.0,
+    "profile_export": False,           # profiles_results.csv (wiersz = profil lub tryb × przebieg)
     # --- Moduł 5: bank odwiedzających (rotacja; domyślnie wyłączony) ---
     # compat_N = cała pula odwiedzających; w parku średnio bank_present_share z nich, reszta czeka w banku.
     # Wyjście z parku nie kasuje agenta: zachowuje strategię i całą pamięć partnerów.
@@ -166,6 +184,17 @@ DEFAULTS = {
     "bypass_on": False,
     # udział przechodzących: wchodzą jednym wejściem i idą najkrótszą drogą do przeciwległego (0 = brak)
     "through_share": 0.0,
+    # Z11: tryb przechodzących (biegacze, rowerzyści); 0 = wszyscy idą pieszo jak dotąd
+    "through_run_share": 0.0,          # udział biegaczy wśród przechodzących
+    "through_bike_share": 0.0,         # udział rowerzystów wśród przechodzących
+    "speed_factor_run": 1.0,           # mnożnik prędkości biegacza (ok. 2,3)
+    "speed_factor_bike": 1.0,          # mnożnik prędkości rowerzysty (ok. 4)
+    "fast_play": "play",               # "play" = grają jak wszyscy; "skip" = nie grają, pieszy, który ich wylosuje,
+                                       # w tym cyklu nie gra; "exclude" = niewidoczni dla gry
+    "run_loop": False,                 # biegacz: pętla przez 2–4 cele bez postoju zamiast przejścia na wprost
+    # ruch: True = reszta dystansu cyklu przechodzi przez węzeł na następną krawędź
+    # (False = jak dotąd: agent zatrzymuje się w węźle do końca cyklu)
+    "move_carry_over": False,
     # ile cykli para nie może zagrać ponownie (życie agenta game w PD.gaml = 10); 0 = bez blokady
     "pair_cooldown": 10,
     "kin_export": False,               # family_timeseries.csv
@@ -271,6 +300,24 @@ GUI_PARAMETERS = [
         ("rest_recovery", "Odzysk energii na cykl"),
         ("rest_target", "Energia: koniec odpoczynku"),
     ]),
+    ("Profile wieku (Moduł 4)", [
+        ("speed_factor_frail", "Mnożnik prędkości – starsi"),
+        ("aided_share", "Udział starszych z laską"),
+        ("fatigue_aided_mean", "Zmęczenie na 100 m – z laską (średnia)"),
+        ("fatigue_aided_sd", "Zmęczenie – z laską (odch. std.)"),
+        ("speed_factor_aided", "Mnożnik prędkości – z laską"),
+        ("dest_dwell_factor_frail", "Mnożnik pobytu w celu – starsi"),
+        ("dest_dwell_factor_aided", "Mnożnik pobytu w celu – z laską"),
+        ("rest_recovery_frail", "Odzysk energii – starsi (< 0 = jak wszyscy)"),
+        ("rest_recovery_aided", "Odzysk energii – z laską (< 0 = jak wszyscy)"),
+        ("arrival_energy", "Energia na wejściu (uniform / distance)"),
+        ("arrival_dist_mean", "Średnia droga do parku (m)"),
+        ("arrival_dist_mean_frail", "Droga do parku – starsi (m, < 0 = jak wszyscy)"),
+        ("arrival_dist_mean_aided", "Droga do parku – z laską (m, < 0 = jak wszyscy)"),
+        ("arrival_transit_share", "Udział przyjazdów komunikacją"),
+        ("arrival_transit_dist", "Droga od przystanku (m)"),
+        ("profile_export", "Eksport profiles_results.csv"),
+    ]),
     ("Moduł 5 – bank odwiedzających", [
         ("bank_on", "Rotacja odwiedzających (bank)"),
         ("bank_present_share", "Udział puli obecny w parku"),
@@ -289,6 +336,13 @@ GUI_PARAMETERS = [
         ("partner_distance", "Odległość do partnera (euclid / network)"),
         ("bypass_on", "Obejście wokół parku (warstwa bypass)"),
         ("through_share", "Udział przechodzących przez park"),
+        ("through_run_share", "Biegacze wśród przechodzących"),
+        ("through_bike_share", "Rowerzyści wśród przechodzących"),
+        ("speed_factor_run", "Mnożnik prędkości – biegacze"),
+        ("speed_factor_bike", "Mnożnik prędkości – rowerzyści"),
+        ("fast_play", "Szybcy a gra (play / skip / exclude)"),
+        ("run_loop", "Biegacze: pętla przez cele"),
+        ("move_carry_over", "Ruch: reszta dystansu przez węzeł"),
     ]),
     ("Diagnostyka", [
         ("timeseries_export", "Eksport szeregów czasowych"),
@@ -919,6 +973,20 @@ class Player:
         self.frail = False
         self.resting = False
         self.rest_cycles = 0
+        # profile wieku i tryb ruchu (bez wpływu na nic przy wartościach domyślnych)
+        self.aided = False            # starszy z laską lub kulą
+        self.speed_factor = 1.0       # mnożnik prędkości profilu i trybu
+        self.mode = "walk"            # przechodzący: "walk" | "run" | "bike"
+        self.rest_bouts_n = 0         # liczba odpoczynków agenta
+        self.low_energy_cycles = 0    # cykle marszu z energią < rest_threshold (szuka strefy)
+        self.zero_energy_cycles = 0   # cykle marszu z energią 0
+        self.park_cycles = 0          # cykle w parku
+        self.arrival_energy_sum = 0.0 # suma energii przy wejściach
+        self.arrivals = 0
+        self.trip_start = 0           # przechodzący: cykl początku przejścia
+        self.trip_cycles = 0          # suma cykli zakończonych przejść
+        self.trips = 0
+        self.lost_games = 0           # pieszy wylosował szybkiego (fast_play = skip)
         # Moduł 5: obecność w parku (bez wpływu na nic przy bank_on = false)
         self.in_park = True
         self.visit_no = 0
@@ -990,7 +1058,7 @@ class Player:
     def apply_character_params(self):
         P = self.model.p
         self.sensitivity = P.movement_sensitivity
-        self.move_speed = P.player_speed
+        self.move_speed = P.player_speed * self.speed_factor   # prędkość profilu przeżywa zmianę charakteru
         if self.character == "AQLEARN":
             self.social_sensitivity = P.social_sensitivity_aqlearn
             self.social_learning_boost = P.social_learning_boost_aqlearn
@@ -1335,12 +1403,25 @@ class Player:
 
     def reflex_move_on_network(self):
         # goto(target, on: path_network, speed: move_speed) - wzdłuż polilinii krawędzi
+        left = self._advance(self.move_speed)
+        if not self.model.p.move_carry_over:
+            return
+        # reszta dystansu przez węzeł na następną krawędź; stop w celu, wyjściu i strefie odpoczynku
+        hops = 0
+        while left > 1e-9 and self._at_target() and not self._stop_at_node() and hops < 1000:
+            hops += 1
+            self.reflex_choose_target()
+            if not self.path or self._at_target():
+                break
+            left = self._advance(left)
+
+    def _advance(self, d):
+        """Przesuwa o d metrów wzdłuż bieżącej krawędzi; zwraca dystans, który został po dojściu do węzła."""
         if not self.path:
             self.location = self.model.network.vertices[self.target_node]
-            return
-        remaining = self.move_speed
+            return 0.0
         pts = self.path
-        pos = self.path_pos + remaining
+        pos = self.path_pos + d
         acc = 0.0
         for i in range(len(pts) - 1):
             seg = _dist(pts[i], pts[i + 1])
@@ -1351,10 +1432,19 @@ class Player:
                 self.path_pos = pos
                 if i == len(pts) - 2 and t >= 1.0:
                     self.location = self.model.network.vertices[self.target_node]
-                return
+                return 0.0
             acc += seg
         self.location = self.model.network.vertices[self.target_node]
         self.path_pos = acc
+        return pos - acc
+
+    def _stop_at_node(self):
+        """move_carry_over: węzeł, w którym agent kończy cykl (cel, wyjście, strefa przy niskiej energii)."""
+        m = self.model
+        if m.dest_hops is not None and self.goal is not None and m.dest_at_goal(self):
+            return True
+        return (m.rest_next_hop is not None and self.energy < m.p.rest_threshold
+                and self.current_node in m.rest_zone_set)
 
     def reflex_wander(self):
         rng = self.model.rng
@@ -1388,11 +1478,18 @@ class Player:
         elif P.well_mixed:
             nearby = [q for q in m.players if q is not self and q.in_park]
         else:
+            if P.fast_play != "play" and self.mode != "walk":
+                return                      # Z11: szybcy (bieg, rower) nie zaczynają gry
             nearby = m.players_within(self, P.vision_radius)
+            if P.fast_play == "exclude":
+                nearby = [q for q in nearby if q.mode == "walk"]
         if not nearby:
             return
         self.enemy = m.rng.choice(nearby)
         enemy = self.enemy
+        if P.fast_play == "skip" and enemy.mode != "walk":
+            self.lost_games += 1            # wylosował przejeżdżającego: w tym cyklu bez gry
+            return
         if enemy is not None and (P.unlimited_games or enemy.height == 0):
             key = m.pair_key(self, enemy)
             if key not in m.active_pairs:
@@ -1408,7 +1505,7 @@ class Player:
         """Moduł 4: True = agent odpoczywa w tym cyklu (stoi i odzyskuje energię, ale gra z sąsiadami)."""
         P, m = self.model.p, self.model
         if self.resting:
-            self.energy = min(P.rest_target, self.energy + P.rest_recovery)
+            self.energy = min(P.rest_target, self.energy + self.rest_recovery_rate())
             self.rest_cycles += 1
             if self.energy >= P.rest_target:
                 self.resting = False
@@ -1417,9 +1514,19 @@ class Player:
                 and (self.target_node is None or self._at_target())):
             self.resting = True
             self.rest_cycles += 1
+            self.rest_bouts_n += 1
             m.rest_bouts += 1
             return True
         return False
+
+    def rest_recovery_rate(self):
+        """Z2: odzysk energii na cykl wg profilu (< 0 w parametrze profilu = rest_recovery)."""
+        P = self.model.p
+        r = P.rest_recovery_aided if self.aided else (P.rest_recovery_frail if self.frail else -1.0)
+        return r if r >= 0 else P.rest_recovery
+
+    def profile(self):
+        return "aided" if self.aided else ("frail" if self.frail else "regular")
 
     def reflex_destination(self):
         """Moduł 6: True = agent stoi w celu w tym cyklu (gra z sąsiadami, nie idzie dalej)."""
@@ -1449,6 +1556,10 @@ class Player:
             return
         if self.model.rest_next_hop is not None and self.target_node is not None and not self._at_target():
             self.energy = max(0.0, self.energy - self.fatigue * self.move_speed)
+            if self.energy < P.rest_threshold:     # niezaspokojona potrzeba odpoczynku
+                self.low_energy_cycles += 1
+                if self.energy == 0.0:
+                    self.zero_energy_cycles += 1
         if P.real_env and not P.well_mixed and (self.target_node is None or self._at_target()):
             self.reflex_choose_target()
         if P.real_env and not P.well_mixed and self.target_node is not None and not self._at_target():
@@ -1516,6 +1627,7 @@ class Model:
         self.kin_last_window = None
         self.timeseries_rows = []     # character_timeseries.csv
         self.compat_rows = []         # compat_results.csv
+        self.profile_rows = []        # profiles_results.csv
         self.rest_next_hop = None     # Moduł 4: węzeł -> następny węzeł w stronę najbliższej strefy
         self.rest_zones = []
         self.rest_zone_set = frozenset()
@@ -1605,6 +1717,7 @@ class Model:
         if P.game_type == "snowdrift" and (P.movement_sensitivity > 0 or P.env_influence_qlearn > 0):
             self.warnings.append("OSTRZEŻENIE: feedback miejsc (feedback_value) nie zależy od macierzy - w snowdrift "
                                  "ocenia C-D gorzej niż D-D, a ruch/uczenie środowiskowe z niego korzysta.")
+        self._check_profile_params()
         for k in CREATION_ORDER:
             self.character_pool += [k] * int(getattr(P, "nb_" + k))
         for ch in self.character_pool:
@@ -1624,6 +1737,31 @@ class Model:
             raise ModelError("movement_mode: default / destinations / schelling, nie %s" % P.movement_mode)
         if P.partner_distance not in ("euclid", "network"):
             raise ModelError("partner_distance: euclid / network, nie %s" % P.partner_distance)
+
+    def _check_profile_params(self):
+        """Profile wieku (Z1, Z2, Z13) i tryby przechodzących (Z11): walidacja parametrów."""
+        P = self.p
+        if not (0.0 <= P.aided_share <= 1.0 and P.frail_share + P.aided_share <= 1.0):
+            raise ModelError("frail_share + aided_share musi być w [0, 1]: %s + %s" % (P.frail_share, P.aided_share))
+        if not (0.0 <= P.through_run_share <= 1.0 and 0.0 <= P.through_bike_share <= 1.0
+                and P.through_run_share + P.through_bike_share <= 1.0):
+            raise ModelError("through_run_share + through_bike_share musi być w [0, 1]: %s + %s"
+                             % (P.through_run_share, P.through_bike_share))
+        for k in ("speed_factor_frail", "speed_factor_aided", "speed_factor_run", "speed_factor_bike",
+                  "dest_dwell_factor_frail", "dest_dwell_factor_aided"):
+            if not getattr(P, k) > 0:
+                raise ModelError("%s musi być > 0: %s" % (k, getattr(P, k)))
+        if P.fast_play not in ("play", "skip", "exclude"):
+            raise ModelError("fast_play: play / skip / exclude, nie %s" % P.fast_play)
+        if P.arrival_energy not in ("uniform", "distance"):
+            raise ModelError("arrival_energy: uniform / distance, nie %s" % P.arrival_energy)
+        if not (0.0 <= P.arrival_transit_share <= 1.0) or P.arrival_dist_mean < 0 or P.arrival_transit_dist < 0:
+            raise ModelError("arrival_transit_share w [0, 1], arrival_dist_mean i arrival_transit_dist >= 0")
+        if (P.aided_share > 0 or P.speed_factor_frail != 1.0 or P.arrival_energy != "uniform") and not P.rest_on:
+            self.warnings.append("Profile wieku działają tylko przy rest_on = true - pominięte.")
+        if (P.through_run_share + P.through_bike_share > 0) and not (P.movement_mode == "destinations"
+                                                                       and P.through_share > 0):
+            self.warnings.append("Biegacze i rowerzyści wymagają movement_mode = destinations i through_share > 0.")
 
     def _setup_rest_zones(self):
         """Moduł 4: strefy odpoczynku w węzłach sieci + zmęczenie z dwóch rozkładów normalnych.
@@ -1712,11 +1850,42 @@ class Model:
         self.rest_zone_set = frozenset(zones)
         self.rest_next_hop = self._next_hop_to(zones)
         for p in self.players:
-            p.frail = rng.random() < P.frail_share
-            mu, sd = ((P.fatigue_frail_mean, P.fatigue_frail_sd) if p.frail
-                      else (P.fatigue_regular_mean, P.fatigue_regular_sd))
+            u = rng.random()                                      # jedno losowanie profilu (jak dotąd)
+            p.frail = u < P.frail_share
+            p.aided = (not p.frail) and u < P.frail_share + P.aided_share
+            if p.aided:
+                mu, sd = P.fatigue_aided_mean, P.fatigue_aided_sd
+            elif p.frail:
+                mu, sd = P.fatigue_frail_mean, P.fatigue_frail_sd
+            else:
+                mu, sd = P.fatigue_regular_mean, P.fatigue_regular_sd
             p.fatigue = max(0.005, rng.gauss(mu, sd)) / 100.0     # na metr
-            p.energy = rng.uniform(P.rest_threshold, 1.0)         # różny stan na starcie
+            p.energy = self.arrival_energy(p, rng)                # różny stan na starcie
+            p.speed_factor = (P.speed_factor_aided if p.aided else
+                              (P.speed_factor_frail if p.frail else 1.0))
+            p.move_speed = P.player_speed * p.speed_factor
+
+    def arrival_energy(self, p, rng):
+        """Z13: energia przy wejściu. "uniform" = U(rest_threshold, 1) jak dotąd (te same losowania);
+        "distance" = 1 - zmęczenie na metr × droga z domu (wykładnicza, średnia wg profilu)
+        albo krótka droga od przystanku z p = arrival_transit_share."""
+        P = self.p
+        if P.arrival_energy == "uniform":
+            e = rng.uniform(P.rest_threshold, 1.0)
+        else:
+            mean = P.arrival_dist_mean
+            if p.aided and P.arrival_dist_mean_aided >= 0:
+                mean = P.arrival_dist_mean_aided
+            elif p.frail and P.arrival_dist_mean_frail >= 0:
+                mean = P.arrival_dist_mean_frail
+            if rng.random() < P.arrival_transit_share:
+                d = P.arrival_transit_dist
+            else:
+                d = rng.expovariate(1.0 / mean) if mean > 0 else 0.0
+            e = max(0.0, 1.0 - p.fatigue * d)
+        p.arrival_energy_sum += e
+        p.arrivals += 1
+        return e
 
     def _setup_destinations(self):
         """Moduł 6: cele (plik albo dest_count węzłów) i wejścia (plik punktów/obrysu albo liście sieci na obrzeżu).
@@ -1750,6 +1919,15 @@ class Model:
             t_rng = random.Random(zlib.crc32(("through-%d" % self.seed).encode()))
             for p in self.players:
                 p.through = t_rng.random() < P.through_share
+            if P.through_run_share + P.through_bike_share > 0:   # Z11: osobny generator trybu
+                m_rng = random.Random(zlib.crc32(("through-mode-%d" % self.seed).encode()))
+                for p in self.players:
+                    if p.through:
+                        u = m_rng.random()
+                        p.mode = ("run" if u < P.through_run_share else
+                                  "bike" if u < P.through_run_share + P.through_bike_share else "walk")
+                        p.speed_factor *= {"run": P.speed_factor_run, "bike": P.speed_factor_bike}.get(p.mode, 1.0)
+                        p.move_speed = P.player_speed * p.speed_factor
             self.opposite = self._opposite_entrances()
             self.through_hops = {e: self._next_hop_to([e]) for e in self.entrances}
         if P.dest_share < 1.0:                   # osobny generator: te same cele przy każdym udziale
@@ -1815,6 +1993,13 @@ class Model:
         rng = self.dest_rng
         p.dwell_left = 0
         p.wants_exit = False
+        if p.through:
+            p.trip_start = self.cycle
+        if p.through and p.mode == "run" and self.p.run_loop and len(self.dests) >= 2:
+            p.used_bypass = False                # Z11: biegacz – pętla przez 2–4 cele bez postoju, potem wyjście
+            p.dests_left = rng.randint(2, 4)
+            self.dest_next_goal(p)
+            return
         if p.through:                            # przechodzący: do przeciwległego wejścia
             p.dests_left = 0
             p.used_bypass = False
@@ -1859,18 +2044,27 @@ class Model:
         """W celu: pobyt z rozkładu wykładniczego. W wyjściu: z bankiem - wyjście z parku,
         bez banku - powrót losowym wejściem z nową wizytą. Przechodzący po dojściu wychodzi
         (z bankiem do banku, bez banku wraca losowym wejściem)."""
-        if p.goal_kind == "through":
+        loop = p.through and p.goal_kind != "through"   # biegacz w pętli (run_loop)
+        if p.goal_kind == "through" or (loop and p.goal_kind == "exit"):
             self.through_trips += 1
             self.through_bypass_trips += p.used_bypass
+            p.trips += 1
+            p.trip_cycles += self.cycle - p.trip_start
             if self.bank_rng is not None:
                 self._bank_leave(p)
             else:
                 self._dest_enter(p)
             return
+        if loop:                                 # punkt pętli: bez postoju, od razu dalej
+            p.dests_left -= 1
+            self.dest_next_goal(p)
+            return
         if p.goal_kind == "dest":
             self.dest_arrivals += 1
             p.dests_left -= 1
-            p.dwell_left = max(1, int(round(self.dest_rng.expovariate(1.0 / self.p.dest_dwell))))
+            P = self.p
+            f = P.dest_dwell_factor_aided if p.aided else (P.dest_dwell_factor_frail if p.frail else 1.0)
+            p.dwell_left = max(1, int(round(self.dest_rng.expovariate(1.0 / (P.dest_dwell * f)))))
             return
         self.dest_exits += 1
         if self.bank_rng is not None and p.wants_exit:
@@ -2045,8 +2239,8 @@ class Model:
             v = self.bank_rng.choice(self.bank_nodes)
             p.current_node = v
             p.location = self.network.vertices[v]
-        if self.rest_next_hop is not None:       # po powrocie z domu wypoczęty
-            p.energy = self.bank_rng.uniform(P.rest_threshold, 1.0)
+        if self.rest_next_hop is not None:       # po powrocie z domu wypoczęty (Z13: albo zmęczony drogą)
+            p.energy = self.arrival_energy(p, self.bank_rng)
 
     def _reflex_visitor_bank(self):
         """Moduł 5: w parku odejście z p = 1/stay; w banku powrót z p dobranym tak, by w stanie
@@ -2524,6 +2718,41 @@ class Model:
                 / len(self.players))
 
     # --- reflexy globalne -------------------------------------------------
+    def _reflex_export_profiles(self):
+        """profiles_results.csv: wiersz = profil wieku (przy rest_on) albo tryb ruchu (przy przechodzących)."""
+        P = self.p
+        groups = []
+        if self.rest_next_hop is not None:
+            for g in ("regular", "frail", "aided"):
+                groups.append(("profile", g, [p for p in self.players if p.profile() == g]))
+        if self.through_hops is not None:
+            groups.append(("mode", "visitor", [p for p in self.players if not p.through]))
+            for g in ("walk", "run", "bike"):
+                groups.append(("mode", g, [p for p in self.players if p.through and p.mode == g]))
+        par = [P.frail_share, P.aided_share, P.speed_factor_frail, P.speed_factor_aided, P.arrival_energy,
+               P.through_share, P.through_run_share, P.through_bike_share, P.fast_play, P.move_carry_over]
+        for kind, g, ps in groups:
+            n = len(ps)
+            if n == 0:
+                continue
+            games = sum(sum(p.met_count.values()) for p in ps)
+            rep = sum(sum(v - 1 for v in p.met_count.values()) for p in ps)
+            pc = max(1, sum(p.park_cycles for p in ps))
+            arr = sum(p.arrivals for p in ps)
+            trips = sum(p.trips for p in ps)
+            self.profile_rows.append([P.variant_name, self.seed, kind, g, n, games / n,
+                                      rep / games if games else "n/a",
+                                      sum(p.rest_bouts_n for p in ps) / n,
+                                      sum(p.rest_cycles for p in ps) / pc,
+                                      sum(p.low_energy_cycles for p in ps) / pc,
+                                      sum(p.zero_energy_cycles for p in ps) / pc,
+                                      sum(p.low_energy_cycles for p in ps) / n,
+                                      sum(p.zero_energy_cycles for p in ps) / n,
+                                      sum(p.arrival_energy_sum for p in ps) / arr if arr else "n/a",
+                                      trips / n, sum(p.trip_cycles for p in ps) / trips if trips else "n/a",
+                                      sum(p.lost_games for p in ps) / n,
+                                      sum(p.move_speed for p in ps) / n] + par)
+
     def _reflex_export_metrics(self):
         self.ablation_rows.append([self.p.variant_name, self.mean_score_all(), self.mean_for("QLEARN"),
                                    self.mean_for("AQLEARN"), self.mean_for_classic(),
@@ -2580,6 +2809,8 @@ class Model:
             self._reflex_export_timeseries()
         if self.cycle == P.end_cycle:
             self._reflex_export_metrics()
+        if P.profile_export and self.cycle == P.end_cycle:
+            self._reflex_export_profiles()
         if P.regression_export and self.cycle == P.regression_cycle:
             self._reflex_fingerprint()
         if P.perf_log and self.cycle % P.perf_interval == 0:
@@ -2595,6 +2826,7 @@ class Model:
         # player
         for pl in list(self.players):
             if pl.in_park:
+                pl.park_cycles += 1
                 pl.step()
         self.cycle += 1
 
@@ -2692,7 +2924,15 @@ COMPAT_HEADER = ["variant_name", "prediction", "seed", "compat_N", "well_mixed",
                  "dest_dwell", "dest_per_visit", "dest_share", "dest_dwell_share", "dest_arrivals_per_agent", "dest_exits_per_agent",
                  "bypass_on", "through_share", "through_trips_per_agent", "through_bypass_share"]
 
+PROFILE_HEADER = ["variant_name", "seed", "group_type", "group", "n_agents", "games_per_agent", "repeat_share",
+                  "rest_bouts_per_agent", "rest_cycle_share", "low_energy_share", "zero_energy_share",
+                  "low_energy_cycles_per_agent", "zero_energy_cycles_per_agent", "mean_arrival_energy",
+                  "trips_per_agent", "mean_trip_cycles", "lost_games_per_agent", "mean_move_speed",
+                  "frail_share", "aided_share", "speed_factor_frail", "speed_factor_aided", "arrival_energy",
+                  "through_share", "through_run_share", "through_bike_share", "fast_play", "move_carry_over"]
+
 CSV_HEADERS = {
+    "profiles_results.csv": PROFILE_HEADER,
     "family_timeseries.csv": ["variant_name", "seed", "cycle", "family_id", "size", "share_ALLC", "share_ALLD"],
     "encounter_cells.csv": ["variant_name", "seed", "network_variant", "col", "row", "total_games",
                             "share_repeat_remembered", "share_repeat_ever", "last_window_share_remembered",
@@ -2935,7 +3175,7 @@ class BatchRun:
         self.jobs = [(dict(dict(base, **c), **(overrides or {})), s) for c in combos for s in seeds]
         self.until_key = spec["until"]
         self.ablation_rows, self.fingerprint_rows, self.perf_rows, self.timeseries_rows = [], [], [], []
-        self.compat_rows, self.encounter_rows, self.family_rows = [], [], []
+        self.compat_rows, self.encounter_rows, self.family_rows, self.profile_rows = [], [], [], []
         self.done = 0
         self.current = None
 
@@ -2970,6 +3210,7 @@ class BatchRun:
                 self.compat_rows += m.compat_rows
                 self.encounter_rows += m.encounter_rows
                 self.family_rows += m.family_rows
+                self.profile_rows += m.profile_rows
                 self.done += 1
                 self.current = None
         return self.done >= len(self.jobs)
@@ -2984,7 +3225,7 @@ class BatchRun:
 BATCH_OUTPUTS = [("ablation_results.csv", "ablation_rows"), ("regression_fingerprint.csv", "fingerprint_rows"),
                  ("perf.csv", "perf_rows"), ("character_timeseries.csv", "timeseries_rows"),
                  ("compat_results.csv", "compat_rows"), ("encounter_cells.csv", "encounter_rows"),
-                 ("family_timeseries.csv", "family_rows")]
+                 ("family_timeseries.csv", "family_rows"), ("profiles_results.csv", "profile_rows")]
 
 
 def batch_outputs(b):
@@ -4235,6 +4476,179 @@ def t_network_distance_same_edge():
     b.prev_node, b.target_node, b.path = u, v, m.network.adj[u][v]
     b.path_pos = 0.2 * L                          # ten sam punkt co 0,8 L w drugą stronę
     assert abs(m.network_distance(a, b, 1e9) - 0.5 * L) < 1e-6
+
+
+# --- profile wieku (Z1, Z2, Z13) i tryby przechodzących (Z11) -----------------------------
+
+def _prof_model(**kw):
+    base = dict(compat_core=True, compat_N=200, compat_mix="equal", network_cleanup=True, synthetic_grid=24,
+                vision_radius=30, player_speed=2.0, log_games=False, rest_on=True)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def _through_model(**kw):
+    base = dict(compat_core=True, compat_N=150, compat_mix="equal", network_cleanup=True, synthetic_grid=16,
+                vision_radius=30, player_speed=2.0, log_games=False, movement_mode="destinations",
+                dest_count=4, dest_dwell=20, dest_per_visit=2.0, through_share=0.4)
+    base.update(kw)
+    return Model(Params(**base), seed=zlib.crc32(sys._getframe(1).f_code.co_name.encode("utf-8")))
+
+
+def t_profile_aided_keeps_frail_draw():
+    # jedno losowanie profilu: frail ten sam z aided i bez; aided tylko wśród nie-frail
+    a = _prof_model()
+    b = _prof_model(aided_share=0.1)
+    assert [p.frail for p in a.players] == [p.frail for p in b.players]
+    assert not any(p.aided for p in a.players)
+    n = sum(p.aided for p in b.players)
+    assert 5 <= n <= 40 and not any(p.aided and p.frail for p in b.players)
+    assert all(p.move_speed == 2.0 for p in b.players)        # mnożniki domyślnie 1
+
+
+def t_profile_speed_survives_character_change():
+    m = _prof_model(aided_share=0.1, speed_factor_frail=0.85, speed_factor_aided=0.7,
+                    evolution_on=True, evolution_interval=10, mutation_rate=0.5)
+    m.run(60)
+    assert m.nb_character_changes > 0
+    for p in m.players:
+        f = 0.7 if p.aided else (0.85 if p.frail else 1.0)
+        assert abs(p.move_speed - 2.0 * f) < 1e-12, (p.profile(), p.move_speed)
+
+
+def t_profile_aided_fatigue_and_validation():
+    m = _prof_model(aided_share=0.15)
+    fa = [p.fatigue for p in m.players if p.aided]
+    ff = [p.fatigue for p in m.players if p.frail]
+    assert sum(fa) / len(fa) > 3 * sum(ff) / len(ff)
+    for kw in (dict(frail_share=0.6, aided_share=0.5), dict(aided_share=-0.1), dict(speed_factor_aided=0.0),
+               dict(arrival_energy="home"), dict(fast_play="dodge"), dict(through_run_share=0.7, through_bike_share=0.5)):
+        try:
+            _prof_model(**kw)
+        except ModelError:
+            continue
+        raise AssertionError("przyjęto %s" % kw)
+
+
+def t_profile_arrival_energy_distance():
+    u = _prof_model()
+    assert all(0.3 <= p.energy <= 1.0 for p in u.players)
+    d = _prof_model(arrival_energy="distance", arrival_dist_mean=500.0)
+    reg = [p.energy for p in d.players if not p.frail]
+    fr = [p.energy for p in d.players if p.frail]
+    assert sum(fr) / len(fr) < sum(reg) / len(reg) - 0.2
+    assert any(p.energy < 0.3 for p in d.players)              # część wchodzi już zmęczona
+    t = _prof_model(arrival_energy="distance", arrival_transit_share=1.0, arrival_transit_dist=50.0)
+    assert all(abs(p.energy - max(0.0, 1.0 - p.fatigue * 50.0)) < 1e-12 for p in t.players)
+    s = _prof_model(arrival_energy="distance", arrival_dist_mean_frail=0.0)
+    assert all(p.energy == 1.0 for p in s.players if p.frail)
+
+
+def t_profile_low_energy_counters():
+    m = _prof_model(aided_share=0.2, rest_zone_count=2, rest_zone_placement="peripheral")
+    m.run(300)
+    la = sum(p.low_energy_cycles for p in m.players if p.aided) / max(1, sum(p.aided for p in m.players))
+    lr = sum(p.low_energy_cycles for p in m.players if p.profile() == "regular") / max(
+        1, sum(p.profile() == "regular" for p in m.players))
+    assert la > lr and all(p.zero_energy_cycles <= p.low_energy_cycles for p in m.players)
+
+
+def t_profile_recovery_and_dwell():
+    m = _prof_model(rest_recovery_frail=0.001)
+    fr = next(p for p in m.players if p.frail)
+    rg = next(p for p in m.players if not p.frail)
+    assert fr.rest_recovery_rate() == 0.001 and rg.rest_recovery_rate() == m.p.rest_recovery
+    d = _dest_model(rest_on=True, dest_dwell_factor_frail=3.0, dest_dwell=30)
+    d.run(1500)
+    def mean_dwell(ps):
+        a = sum(p.dwell_cycles for p in ps)
+        return a / max(1, sum(1 for _ in ps))
+    fr = [p for p in d.players if p.frail]
+    rg = [p for p in d.players if not p.frail]
+    assert mean_dwell(fr) > 1.5 * mean_dwell(rg)
+
+
+def t_through_modes_speed_and_population():
+    a = _through_model()
+    b = _through_model(through_run_share=0.3, through_bike_share=0.3, speed_factor_run=2.3, speed_factor_bike=4.0)
+    assert [(p.character, p.through) for p in a.players] == [(p.character, p.through) for p in b.players]
+    assert all(p.mode == "walk" for p in a.players)
+    assert not any(p.mode != "walk" for p in b.players if not p.through)
+    for p in b.players:
+        f = {"walk": 1.0, "run": 2.3, "bike": 4.0}[p.mode]
+        assert abs(p.move_speed - 2.0 * f) < 1e-12
+    assert any(p.mode == "run" for p in b.players) and any(p.mode == "bike" for p in b.players)
+
+
+def t_through_fast_play_skip_and_exclude():
+    for fp in ("skip", "exclude"):
+        m = _through_model(through_bike_share=0.5, speed_factor_bike=4.0, fast_play=fp, unlimited_games=True)
+        seen = []
+        m.on_game_played = lambda g, _f=m.on_game_played: (seen.append((g.p1.mode, g.p2.mode)), _f(g))
+        m.run(400)
+        assert seen and all(a == "walk" and b == "walk" for a, b in seen), fp
+        lost = sum(p.lost_games for p in m.players)
+        assert (lost > 0) if fp == "skip" else (lost == 0), (fp, lost)
+    m = _through_model(through_bike_share=0.5, speed_factor_bike=4.0, fast_play="play", unlimited_games=True)
+    seen = []
+    m.on_game_played = lambda g, _f=m.on_game_played: (seen.append((g.p1.mode, g.p2.mode)), _f(g))
+    m.run(400)
+    assert any("bike" in s for s in seen)
+
+
+def t_move_carry_over_keeps_nominal_speed():
+    # siatka z krawędziami 5 m i prędkość 8 m/cykl: bez przenoszenia agent staje w każdym węźle (<= 5 m/cykl)
+    lines = []
+    for i in range(20):
+        for j in range(20):
+            if i + 1 < 20:
+                lines.append([(5.0 * i, 5.0 * j), (5.0 * i + 5.0, 5.0 * j)])
+            if j + 1 < 20:
+                lines.append([(5.0 * i, 5.0 * j), (5.0 * i, 5.0 * j + 5.0)])
+    net = PathNetwork(lines, 100.0, 100.0, "grid5")
+
+    def dist_per_cycle(carry):
+        m = Model(Params(nb_TFT=10, player_speed=8.0, log_games=False, move_carry_over=carry, vision_radius=0),
+                  seed=3, network=net)
+        moved = [0.0]
+        for p in m.players:
+            adv = p._advance
+            p._advance = lambda d, _a=adv: (lambda left: (moved.__setitem__(0, moved[0] + d - left), left)[1])(_a(d))
+        m.run(50)
+        return moved[0] / (50 * len(m.players))
+    off, on = dist_per_cycle(False), dist_per_cycle(True)
+    assert off <= 5.0 + 1e-9 and abs(on - 8.0) < 0.05, (off, on)
+
+
+def t_move_carry_over_stops_at_goal():
+    m = _through_model(through_bike_share=1.0, speed_factor_bike=4.0, move_carry_over=True)
+    m.run(800)
+    assert m.through_trips > 0
+    bikes = [p for p in m.players if p.mode == "bike"]
+    assert bikes and all(p.location in [m.network.vertices[v] for v in m.network.adj] or p.path for p in bikes)
+
+
+def t_run_loop_visits_dests_then_leaves():
+    m = _through_model(through_run_share=1.0, speed_factor_run=2.3, run_loop=True, bank_on=True,
+                       bank_present_share=0.5, bank_mean_stay=200)
+    runners = [p for p in m.players if p.mode == "run" and p.in_park]
+    assert runners and all(p.goal_kind == "dest" and 2 <= p.dests_left <= 4 for p in runners)
+    m.run(1500)
+    assert sum(p.trips for p in m.players if p.mode == "run") > 0
+    assert all(p.dwell_cycles == 0 for p in m.players if p.mode == "run")
+
+
+def t_profile_export_rows():
+    m = _dest_model(rest_on=True, aided_share=0.1, through_share=0.3, through_bike_share=0.5, speed_factor_bike=4.0,
+                    fast_play="skip", profile_export=True, end_cycle=300)
+    m.run(301)
+    groups = [(r[2], r[3]) for r in m.profile_rows]
+    assert ("profile", "regular") in groups and ("profile", "aided") in groups and ("mode", "bike") in groups
+    assert all(len(r) == len(PROFILE_HEADER) for r in m.profile_rows)
+    assert "profiles_results.csv" in dict(batch_outputs(m))
+    m2 = _dest_model(end_cycle=50)
+    m2.run(51)
+    assert m2.profile_rows == []
 
 
 TESTS = [(name[2:], fn) for name, fn in sorted(globals().items()) if name.startswith("t_") and callable(fn)]
