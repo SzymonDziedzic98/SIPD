@@ -402,6 +402,24 @@ global {
 	float rest_threshold <- 0.3;           // poniżej tej energii agent idzie do najbliższej strefy
 	float rest_recovery <- 0.005;          // odzysk energii na cykl
 	float rest_target <- 1.0;              // energia, przy której agent wstaje
+	// profile wieku (Z1, Z2, Z13; tylko przy rest_on; wartości domyślne = model bez zmian, jak w porcie)
+	// frail = starsi bez pomocy (ok. 350 m do odpoczynku), aided = z laską lub kulą (ok. 75 m)
+	float speed_factor_frail <- 1.0;       // mnożnik prędkości frail (literatura: 0,75–0,9)
+	float aided_share <- 0.0;              // udział aided (0 = brak profilu; przy 0 losowanie frail jak dotąd)
+	float fatigue_aided_mean <- 0.93;      // utrata energii na 100 m - aided
+	float fatigue_aided_sd <- 0.2;
+	float speed_factor_aided <- 1.0;       // mnożnik prędkości aided (literatura: ok. 0,7)
+	float dest_dwell_factor_frail <- 1.0;  // Z2: mnożnik średniego pobytu w celu
+	float dest_dwell_factor_aided <- 1.0;
+	float rest_recovery_frail <- -1.0;     // Z2: odzysk energii na cykl; < 0 = rest_recovery
+	float rest_recovery_aided <- -1.0;
+	string arrival_energy <- "uniform";    // Z13: "uniform" = rnd(rest_threshold, 1) jak dotąd; "distance" = 1 - zmęczenie × droga
+	float arrival_dist_mean <- 500.0;      // średnia droga z domu do parku (m, rozkład wykładniczy)
+	float arrival_dist_mean_frail <- -1.0; // < 0 = arrival_dist_mean
+	float arrival_dist_mean_aided <- -1.0;
+	float arrival_transit_share <- 0.0;    // udział przyjazdów komunikacją lub autem
+	float arrival_transit_dist <- 50.0;    // droga od przystanku (m)
+	bool profile_export <- false;          // profiles_results.csv (wiersz = profil lub tryb × przebieg)
 	bool rest_active <- false;             // moduł faktycznie działa (sieć, nie well_mixed)
 	list<int> rest_zones <- [];
 	list<int> rest_hop <- [];              // węzeł -> następny węzeł w stronę najbliższej strefy (-1 = brak)
@@ -440,6 +458,19 @@ global {
 	bool bypass_on <- false;               // obejście wokół parku (bypass_file): korzystają z niego tylko przechodzący
 	string bypass_file <- "";              // SHP z liniami obejścia (warstwa "bypass" pliku wejść w porcie)
 	float through_share <- 0.0;            // udział przechodzących: wejście -> przeciwległe wejście
+	// Z11: tryb przechodzących (biegacze, rowerzyści); 0 = wszyscy idą pieszo jak dotąd
+	float through_run_share <- 0.0;        // udział biegaczy wśród przechodzących
+	float through_bike_share <- 0.0;       // udział rowerzystów wśród przechodzących
+	float speed_factor_run <- 1.0;         // mnożnik prędkości biegacza (ok. 2,3)
+	float speed_factor_bike <- 1.0;        // mnożnik prędkości rowerzysty (ok. 4)
+	float fatigue_factor_run <- 1.0;       // mnożnik zmęczenia na metr – biegacze (1 = jak pieszy)
+	float fatigue_factor_bike <- 1.0;      // mnożnik zmęczenia na metr – rowerzyści (1 = jak pieszy)
+	bool fast_regular_only <- false;       // true = biegacze/rowerzyści tylko wśród profilu regular
+	string fast_play <- "play";            // "play" = grają jak wszyscy; "skip" = nie grają, a pieszy, który ich wylosuje,
+	                                       // w tym cyklu nie gra; "exclude" = niewidoczni dla gry
+	bool run_loop <- false;                // biegacz: pętla przez 2–4 cele bez postoju zamiast przejścia na wprost
+	// ruch: true = reszta dystansu cyklu przechodzi przez węzeł na następną krawędź (false = jak dotąd)
+	bool move_carry_over <- false;
 	bool dest_active <- false;
 	list<int> dests <- [];
 	list<int> entrances <- [];
@@ -644,11 +675,19 @@ global {
 			rest_hop <- next_hop_to(rest_zones, map<string, bool>([]));
 			rest_active <- true;
 			ask player {
-				frail <- flip(frail_share);
-				float mu <- frail ? fatigue_frail_mean : fatigue_regular_mean;
-				float sd <- frail ? fatigue_frail_sd : fatigue_regular_sd;
+				if aided_share = 0.0 {
+					frail <- flip(frail_share);                    // jak dotąd: ta sama sekwencja losowań
+				} else {
+					float u <- rnd(1.0);                           // jedno losowanie profilu
+					frail <- u < frail_share;
+					aided <- !frail and u < frail_share + aided_share;
+				}
+				float mu <- aided ? fatigue_aided_mean : (frail ? fatigue_frail_mean : fatigue_regular_mean);
+				float sd <- aided ? fatigue_aided_sd : (frail ? fatigue_frail_sd : fatigue_regular_sd);
 				fatigue <- max(0.005, gauss(mu, sd)) / 100.0;     // na metr
-				energy <- rnd(rest_threshold, 1.0);                // różny stan na starcie
+				energy <- draw_arrival_energy();                   // różny stan na starcie
+				speed_factor <- aided ? speed_factor_aided : (frail ? speed_factor_frail : 1.0);
+				move_speed <- player_speed * speed_factor;
 			}
 		}
 	}
@@ -731,6 +770,20 @@ global {
 		if through_share > 0 {
 			if length(entrances) < 2 { error "Przechodzący wymagają co najmniej dwóch wejść."; }
 			ask player { through <- flip(through_share); }
+			if through_run_share + through_bike_share > 0 {     // Z11: tryb przechodzącego
+				ask player where each.through {
+					float u <- rnd(1.0);
+					travel_mode <- u < through_run_share ? "run" : (u < through_run_share + through_bike_share ? "bike" : "walk");
+					if fast_regular_only and (frail or aided) { travel_mode <- "walk"; }   // starsi nie biegają ani nie jeżdżą
+					speed_factor <- speed_factor * (travel_mode = "run" ? speed_factor_run : (travel_mode = "bike" ? speed_factor_bike : 1.0));
+					move_speed <- player_speed * speed_factor;
+					float kf <- travel_mode = "run" ? fatigue_factor_run : (travel_mode = "bike" ? fatigue_factor_bike : 1.0);
+					if kf != 1.0 {                // zmęczenie na metr dla szybkiego trybu
+						fatigue <- fatigue * kf;
+						if arrival_energy = "distance" and energy > 0.0 { energy <- max(0.0, min(1.0, 1.0 - kf * (1.0 - energy))); }
+					}
+				}
+			}
 			do compute_opposite();
 			loop e over: entrances { through_hops[e] <- next_hop_to([e], map<string, bool>([])); }
 			through_active <- true;
@@ -913,6 +966,71 @@ global {
 			}
 		}
 		return best <= radius + 1.0e-9 ? best : 1.0e9;
+	}
+
+	// profile wieku i tryby przechodzących: walidacja (jak _check_profile_params w porcie)
+	action check_profile_params {
+		if aided_share < 0 or aided_share > 1 or frail_share + aided_share > 1 {
+			error "frail_share + aided_share musi być w [0, 1]: " + frail_share + " + " + aided_share;
+		}
+		if through_run_share < 0 or through_bike_share < 0 or through_run_share + through_bike_share > 1 {
+			error "through_run_share + through_bike_share musi być w [0, 1]: " + through_run_share + " + " + through_bike_share;
+		}
+		if speed_factor_frail <= 0 or speed_factor_aided <= 0 or speed_factor_run <= 0 or speed_factor_bike <= 0
+			or dest_dwell_factor_frail <= 0 or dest_dwell_factor_aided <= 0 {
+			error "mnożniki prędkości i pobytu muszą być > 0";
+		}
+		if fatigue_factor_run < 0 or fatigue_factor_bike < 0 { error "mnożniki zmęczenia muszą być >= 0"; }
+		if !(fast_play in ["play", "skip", "exclude"]) { error "fast_play: play / skip / exclude, nie " + fast_play; }
+		if !(arrival_energy in ["uniform", "distance"]) { error "arrival_energy: uniform / distance, nie " + arrival_energy; }
+		if arrival_transit_share < 0 or arrival_transit_share > 1 or arrival_dist_mean < 0 or arrival_transit_dist < 0 {
+			error "arrival_transit_share w [0, 1], arrival_dist_mean i arrival_transit_dist >= 0";
+		}
+		if (aided_share > 0 or speed_factor_frail != 1.0 or arrival_energy != "uniform") and !rest_on {
+			write "Profile wieku działają tylko przy rest_on = true - pominięte.";
+		}
+	}
+
+	// profiles_results.csv: wiersz = profil wieku (przy rest_on) albo tryb ruchu (przy przechodzących)
+	reflex export_profiles when: profile_export and cycle = end_cycle {
+		list<list> groups <- [];
+		if rest_active {
+			groups <+ ["profile", "regular", player where (!each.frail and !each.aided)];
+			groups <+ ["profile", "frail", player where each.frail];
+			groups <+ ["profile", "aided", player where each.aided];
+		}
+		if through_active {
+			groups <+ ["mode", "visitor", player where !each.through];
+			groups <+ ["mode", "walk", player where (each.through and each.travel_mode = "walk")];
+			groups <+ ["mode", "run", player where (each.through and each.travel_mode = "run")];
+			groups <+ ["mode", "bike", player where (each.through and each.travel_mode = "bike")];
+		}
+		loop gr over: groups {
+			list<player> ps <- list<player>(gr[2]);
+			int n <- length(ps);
+			if n > 0 {
+				int games <- sum(ps collect sum(each.met_count.values));
+				int rep <- sum(ps collect (sum(each.met_count.values) - length(each.met_count)));
+				int pc <- max(1, sum(ps collect each.park_cycles));
+				int arr <- sum(ps collect each.arrivals);
+				int trips <- sum(ps collect each.trips);
+				save [variant_name, seed, string(gr[0]), string(gr[1]), n, games / n,
+					games > 0 ? string(rep / games) : "n/a",
+					sum(ps collect each.rest_bouts_n) / n,
+					sum(ps collect each.rest_cycles) / pc,
+					sum(ps collect each.low_energy_cycles) / pc,
+					sum(ps collect each.zero_energy_cycles) / pc,
+					sum(ps collect each.low_energy_cycles) / n,
+					sum(ps collect each.zero_energy_cycles) / n,
+					arr > 0 ? string(sum(ps collect each.arrival_energy_sum) / arr) : "n/a",
+					trips / n, trips > 0 ? string(sum(ps collect each.trip_cycles) / trips) : "n/a",
+					sum(ps collect each.lost_games) / n,
+					sum(ps collect each.move_speed) / n,
+					frail_share, aided_share, speed_factor_frail, speed_factor_aided, arrival_energy,
+					through_share, through_run_share, through_bike_share, fast_play, move_carry_over]
+					to: "../results/profiles_results.csv" rewrite: false format: "csv" header: false;
+			}
+		}
 	}
 
 	// metryki modułu 4 (jak rest_metrics w porcie)
@@ -1630,6 +1748,7 @@ Aktualnie : T=" + payoff_T + " R=" + payoff_R + " P=" + payoff_P + " S=" + payof
 				}
 			}
 		}
+		do check_profile_params();
 		if kin_on { do setup_families(); }
 		if rest_on { do setup_rest_zones(); }
 		if bank_on {
@@ -1950,6 +2069,20 @@ species player skills: [moving] {
 	bool frail <- false;
 	bool resting <- false;
 	int rest_cycles <- 0;
+	// profile wieku i tryb ruchu (bez wpływu na nic przy wartościach domyślnych)
+	bool aided <- false;                     // starszy z laską lub kulą
+	float speed_factor <- 1.0;               // mnożnik prędkości profilu i trybu
+	string travel_mode <- "walk";            // przechodzący: "walk" | "run" | "bike"
+	int rest_bouts_n <- 0;
+	int low_energy_cycles <- 0;              // cykle marszu z energią < rest_threshold
+	int zero_energy_cycles <- 0;             // cykle marszu z energią 0
+	int park_cycles <- 0;
+	float arrival_energy_sum <- 0.0;
+	int arrivals <- 0;
+	int trip_start <- 0;                     // przechodzący: cykl początku przejścia
+	int trip_cycles <- 0;
+	int trips <- 0;
+	int lost_games <- 0;                     // pieszy wylosował szybkiego (fast_play = skip)
 	bool in_park <- true;                    // Moduł 5
 	int visit_no <- 0;
 	map<player, int> first_met_visit;        // partner -> numer mojej wizyty, w której go poznałem
@@ -1996,7 +2129,30 @@ species player skills: [moving] {
 			current_node <- v;
 			location <- v;
 		}
-		if rest_active { energy <- rnd(rest_threshold, 1.0); }
+		if rest_active { energy <- draw_arrival_energy(); }   // po powrocie z domu (Z13: zmęczony drogą)
+	}
+
+	// Z13: energia przy wejściu; "uniform" = rnd(rest_threshold, 1) jak dotąd (to samo losowanie);
+	// "distance" = 1 - zmęczenie na metr × droga z domu (wykładnicza, średnia wg profilu) albo od przystanku
+	float draw_arrival_energy {
+		float e <- 0.0;
+		if arrival_energy = "uniform" {
+			e <- rnd(rest_threshold, 1.0);
+		} else {
+			float mean_d <- arrival_dist_mean;
+			if aided and arrival_dist_mean_aided >= 0 { mean_d <- arrival_dist_mean_aided; }
+			else if frail and arrival_dist_mean_frail >= 0 { mean_d <- arrival_dist_mean_frail; }
+			float d <- 0.0;
+			if rnd(1.0) < arrival_transit_share {
+				d <- arrival_transit_dist;
+			} else if mean_d > 0 {
+				d <- -mean_d * ln(max(1.0e-12, 1.0 - rnd(1.0)));   // wykładniczy przez odwrotną dystrybuantę
+			}
+			e <- max(0.0, 1.0 - fatigue * d);
+		}
+		arrival_energy_sum <- arrival_energy_sum + e;
+		arrivals <- arrivals + 1;
+		return e;
 	}
 
 	action dest_enter {
@@ -2015,6 +2171,13 @@ species player skills: [moving] {
 		dwell_left <- 0;
 		wants_exit <- false;
 		int cur <- node_idx[current_node];
+		if through { trip_start <- cycle; }
+		if through and travel_mode = "run" and run_loop and length(dests) >= 2 {
+			used_bypass <- false;                    // Z11: biegacz - pętla przez 2-4 cele bez postoju, potem wyjście
+			dests_left <- rnd(2, 4);
+			do dest_next_goal();
+			return;
+		}
 		if through {
 			dests_left <- 0;
 			used_bypass <- false;
@@ -2056,18 +2219,31 @@ species player skills: [moving] {
 	// w celu: pobyt z rozkładu wykładniczego; w wyjściu: z bankiem - wyjście z parku, bez banku - powrót
 	// losowym wejściem z nową wizytą; przechodzący po dojściu wychodzi (jak dest_arrived)
 	action dest_arrived {
-		if goal_kind = "through" {
+		bool in_loop <- through and goal_kind != "through";   // biegacz w pętli (run_loop)
+		if goal_kind = "through" or (in_loop and goal_kind = "exit") {
 			through_trips <- through_trips + 1;
 			if used_bypass { through_bypass_trips <- through_bypass_trips + 1; }
+			trips <- trips + 1;
+			trip_cycles <- trip_cycles + cycle - trip_start;
 			if bank_active { do bank_leave(); } else { do dest_enter(); }
+			return;
+		}
+		if in_loop {                                 // punkt pętli: bez postoju, od razu dalej
+			dests_left <- dests_left - 1;
+			do dest_next_goal();
 			return;
 		}
 		if goal_kind = "dest" {
 			dest_arrivals <- dest_arrivals + 1;
 			dests_left <- dests_left - 1;
-			// rozkład wykładniczy o średniej dest_dwell przez odwrotną dystrybuantę (jak expovariate w porcie);
-			// exp_rnd w GAMA 2025 dawało tu pobyty ~1 cykl
-			dwell_left <- max(1, round(-dest_dwell * ln(max(1.0e-12, 1.0 - rnd(1.0)))));
+			// rozkład wykładniczy o średniej dest_dwell (× mnożnik profilu, Z2) przez odwrotną dystrybuantę
+			// (jak expovariate w porcie); exp_rnd w GAMA 2025 dawało tu pobyty ~1 cykl
+			if aided or frail {
+				float f <- aided ? dest_dwell_factor_aided : dest_dwell_factor_frail;
+				dwell_left <- max(1, round(-dest_dwell * f * ln(max(1.0e-12, 1.0 - rnd(1.0)))));
+			} else {
+				dwell_left <- max(1, round(-dest_dwell * ln(max(1.0e-12, 1.0 - rnd(1.0)))));
+			}
 			return;
 		}
 		dest_exits <- dest_exits + 1;
@@ -2111,7 +2287,7 @@ species player skills: [moving] {
 	// parametry zależne od charakteru - wydzielone z global.init, żeby dało się je testować
 	action apply_character_params {
 		sensitivity <- movement_sensitivity;
-		move_speed <- player_speed;
+		move_speed <- player_speed * speed_factor;   // prędkość profilu przeżywa zmianę charakteru
 		if character = "AQLEARN" {
 			social_sensitivity <- social_sensitivity_aqlearn;
 			social_learning_boost <- social_learning_boost_aqlearn;
@@ -2250,6 +2426,7 @@ species player skills: [moving] {
 	// krok gracza w kolejności Player.step portu; przy wyłączonych modułach te same akcje i ta sama
 	// kolejność co dawne osobne refleksy (choose_target, move_on_network, wander, height_decay, play)
 	reflex step_player when: in_park {
+		park_cycles <- park_cycles + 1;
 		bool stop <- false;
 		if dest_active and destination_step() {
 			if unlimited_games or height = 0 { do try_play(); }
@@ -2263,6 +2440,10 @@ species player skills: [moving] {
 		if !stop {
 			if rest_active and target_node != nil and !at_target {
 				energy <- max(0.0, energy - fatigue * move_speed);
+				if energy < rest_threshold {             // niezaspokojona potrzeba odpoczynku
+					low_energy_cycles <- low_energy_cycles + 1;
+					if energy = 0.0 { zero_energy_cycles <- zero_energy_cycles + 1; }
+				}
 			}
 			if real_env and !well_mixed and (target_node = nil or location = target_node) { do choose_target(); }
 			if real_env and !well_mixed and target_node != nil and location != target_node { do move_on_network(); }
@@ -2275,7 +2456,8 @@ species player skills: [moving] {
 	// Moduł 4: true = agent odpoczywa w tym cyklu (stoi i odzyskuje energię, ale gra z sąsiadami)
 	bool rest_step {
 		if resting {
-			energy <- min(rest_target, energy + rest_recovery);
+			float rr <- aided ? rest_recovery_aided : (frail ? rest_recovery_frail : -1.0);   // Z2
+			energy <- min(rest_target, energy + (rr >= 0 ? rr : rest_recovery));
 			rest_cycles <- rest_cycles + 1;
 			if energy >= rest_target { resting <- false; }
 			return resting;
@@ -2283,6 +2465,7 @@ species player skills: [moving] {
 		if energy < rest_threshold and (node_idx[current_node] in rest_zones) and (target_node = nil or at_target) {
 			resting <- true;
 			rest_cycles <- rest_cycles + 1;
+			rest_bouts_n <- rest_bouts_n + 1;
 			rest_bouts <- rest_bouts + 1;
 			return true;
 		}
@@ -2319,15 +2502,30 @@ species player skills: [moving] {
 		}
 	}
 
-	// jak reflex_move_on_network w porcie: move_speed wzdłuż polilinii krawędzi, bez przenoszenia
-	// reszty dystansu przez węzeł
+	// jak reflex_move_on_network w porcie: move_speed wzdłuż polilinii krawędzi; przy move_carry_over
+	// reszta dystansu przechodzi przez węzeł na następną krawędź (stop w celu, wyjściu i strefie odpoczynku)
 	action move_on_network {
+		float left <- advance(move_speed);
+		if move_carry_over {
+			int hops <- 0;
+			loop while: left > 1.0e-9 and at_target and !stop_at_node() and hops < 1000 {
+				hops <- hops + 1;
+				do choose_target();
+				if empty(path_pts) or at_target { break; }
+				left <- advance(left);
+			}
+		}
+	}
+
+	// przesuwa o d metrów po bieżącej krawędzi; zwraca dystans, który został po dojściu do węzła
+	float advance(float d) {
 		// to samo co pętla po odcinkach od początku krawędzi w porcie, ale od bieżącego odcinka (pozycja tylko rośnie);
 		// 41 wierzchołków na krawędź w parkach OSM robiło z tej pętli główny koszt przebiegu
+		float left <- 0.0;
 		if empty(path_pts) {
 			location <- target_node;
 		} else {
-			float pos <- path_pos + move_speed;
+			float pos <- path_pos + d;
 			int last_i <- length(path_pts) - 2;
 			int i <- seg_i;
 			loop while: i <= last_i and path_cum[i + 1] < pos { i <- i + 1; }
@@ -2335,6 +2533,7 @@ species player skills: [moving] {
 				location <- target_node;
 				path_pos <- path_cum[last_i + 1];
 				seg_i <- last_i;
+				left <- pos - path_pos;
 			} else {
 				point p0 <- path_pts[i];
 				point p1 <- path_pts[i + 1];
@@ -2346,6 +2545,13 @@ species player skills: [moving] {
 				if i = last_i and tt >= 1.0 { location <- target_node; }
 			}
 		}
+		return left;
+	}
+
+	// move_carry_over: węzeł, w którym agent kończy cykl (cel, wyjście, strefa przy niskiej energii)
+	bool stop_at_node {
+		if dest_active and goal_kind != "" and dest_at_goal() { return true; }
+		return rest_active and energy < rest_threshold and (node_idx[current_node] in rest_zones);
 	}
 
 
@@ -2677,9 +2883,11 @@ species player skills: [moving] {
 
 
 	action try_play {
+		if fast_play != "play" and travel_mode != "walk" and !well_mixed { return; }   // Z11: szybcy nie zaczynają gry
 		// sąsiedzi liczeni raz na krok (wcześniej dwukrotnie przez atrybut funkcyjny) - te same wartości
 		list<player> nearby <- well_mixed ? (list(player) - self) : ((player at_distance(vision_radius)) - [self]);
 		if bank_active { nearby <- nearby where each.in_park; }
+		if fast_play = "exclude" and !well_mixed { nearby <- nearby where (each.travel_mode = "walk"); }
 		if partner_distance = "network" and real_env and !well_mixed {
 			list<float> pm <- net_pos();
 			nearby <- nearby where (world.network_distance(pm, each.net_pos(), vision_radius) <= vision_radius);
@@ -2694,6 +2902,10 @@ species player skills: [moving] {
 		}
 		if !empty(nearby) {
 			enemy <- one_of(nearby);
+			if fast_play = "skip" and enemy.travel_mode != "walk" {
+				lost_games <- lost_games + 1;            // wylosował przejeżdżającego: w tym cyklu bez gry
+				return;
+			}
 
 			if enemy != nil and (unlimited_games or enemy.height = 0) {
 
