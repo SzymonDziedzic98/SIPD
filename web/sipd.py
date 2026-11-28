@@ -189,6 +189,9 @@ DEFAULTS = {
     "through_bike_share": 0.0,         # udział rowerzystów wśród przechodzących
     "speed_factor_run": 1.0,           # mnożnik prędkości biegacza (ok. 2,3)
     "speed_factor_bike": 1.0,          # mnożnik prędkości rowerzysty (ok. 4)
+    "fatigue_factor_run": 1.0,         # mnożnik zmęczenia na metr – biegacze (1 = jak pieszy)
+    "fatigue_factor_bike": 1.0,        # mnożnik zmęczenia na metr – rowerzyści (1 = jak pieszy)
+    "fast_regular_only": False,        # True = biegacze/rowerzyści tylko wśród profilu regular (frail/aided idą)
     "fast_play": "play",               # "play" = grają jak wszyscy; "skip" = nie grają, pieszy, który ich wylosuje,
                                        # w tym cyklu nie gra; "exclude" = niewidoczni dla gry
     "run_loop": False,                 # biegacz: pętla przez 2–4 cele bez postoju zamiast przejścia na wprost
@@ -340,6 +343,9 @@ GUI_PARAMETERS = [
         ("through_bike_share", "Rowerzyści wśród przechodzących"),
         ("speed_factor_run", "Mnożnik prędkości – biegacze"),
         ("speed_factor_bike", "Mnożnik prędkości – rowerzyści"),
+        ("fatigue_factor_run", "Mnożnik zmęczenia – biegacze"),
+        ("fatigue_factor_bike", "Mnożnik zmęczenia – rowerzyści"),
+        ("fast_regular_only", "Szybcy tylko wśród profilu regular"),
         ("fast_play", "Szybcy a gra (play / skip / exclude)"),
         ("run_loop", "Biegacze: pętla przez cele"),
         ("move_carry_over", "Ruch: reszta dystansu przez węzeł"),
@@ -1751,6 +1757,9 @@ class Model:
                   "dest_dwell_factor_frail", "dest_dwell_factor_aided"):
             if not getattr(P, k) > 0:
                 raise ModelError("%s musi być > 0: %s" % (k, getattr(P, k)))
+        for k in ("fatigue_factor_run", "fatigue_factor_bike"):
+            if not getattr(P, k) >= 0:
+                raise ModelError("%s musi być >= 0: %s" % (k, getattr(P, k)))
         if P.fast_play not in ("play", "skip", "exclude"):
             raise ModelError("fast_play: play / skip / exclude, nie %s" % P.fast_play)
         if P.arrival_energy not in ("uniform", "distance"):
@@ -1926,8 +1935,15 @@ class Model:
                         u = m_rng.random()
                         p.mode = ("run" if u < P.through_run_share else
                                   "bike" if u < P.through_run_share + P.through_bike_share else "walk")
+                        if P.fast_regular_only and (p.frail or p.aided):   # starsi nie biegają ani nie jeżdżą
+                            p.mode = "walk"
                         p.speed_factor *= {"run": P.speed_factor_run, "bike": P.speed_factor_bike}.get(p.mode, 1.0)
                         p.move_speed = P.player_speed * p.speed_factor
+                        k = {"run": P.fatigue_factor_run, "bike": P.fatigue_factor_bike}.get(p.mode, 1.0)
+                        if k != 1.0:                      # zmęczenie na metr dla szybkiego trybu
+                            p.fatigue *= k
+                            if P.arrival_energy == "distance" and p.energy > 0.0:   # energia startowa z tej samej drogi
+                                p.energy = max(0.0, min(1.0, 1.0 - k * (1.0 - p.energy)))
             self.opposite = self._opposite_entrances()
             self.through_hops = {e: self._next_hop_to([e]) for e in self.entrances}
         if P.dest_share < 1.0:                   # osobny generator: te same cele przy każdym udziale
@@ -4649,6 +4665,32 @@ def t_profile_export_rows():
     m2 = _dest_model(end_cycle=50)
     m2.run(51)
     assert m2.profile_rows == []
+
+
+def t_fast_fatigue_factor_scales_fatigue():
+    kw = dict(rest_on=True, aided_share=0.1, through_share=0.5, through_run_share=0.3, through_bike_share=0.3,
+              speed_factor_run=2.3, speed_factor_bike=4.0, arrival_energy="distance")
+    a = _dest_model(**kw)
+    b = _dest_model(fatigue_factor_run=0.5, fatigue_factor_bike=0.0, **kw)
+    for p, q in zip(a.players, b.players):
+        assert p.mode == q.mode
+        k = {"run": 0.5, "bike": 0.0}.get(p.mode, 1.0)
+        assert abs(q.fatigue - k * p.fatigue) < 1e-15
+        if p.energy > 0:
+            assert abs(q.energy - min(1.0, 1.0 - k * (1.0 - p.energy))) < 1e-12
+    assert any(p.mode == "bike" for p in b.players)
+    c = _dest_model(fatigue_factor_run=1.0, fatigue_factor_bike=1.0, **kw)
+    assert [(p.fatigue, p.energy) for p in a.players] == [(p.fatigue, p.energy) for p in c.players]
+
+
+def t_fast_regular_only_keeps_elderly_walking():
+    kw = dict(rest_on=True, frail_share=0.3, aided_share=0.2, through_share=0.6, through_run_share=0.3,
+              through_bike_share=0.4, speed_factor_run=2.3, speed_factor_bike=4.0)
+    a = _dest_model(**kw)
+    b = _dest_model(fast_regular_only=True, **kw)
+    assert any(p.mode != "walk" and (p.frail or p.aided) for p in a.players)
+    assert all(p.mode == "walk" for p in b.players if p.frail or p.aided)
+    assert all(p.mode == q.mode for p, q in zip(a.players, b.players) if not (p.frail or p.aided))
 
 
 TESTS = [(name[2:], fn) for name, fn in sorted(globals().items()) if name.startswith("t_") and callable(fn)]

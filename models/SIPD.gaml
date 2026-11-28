@@ -463,6 +463,9 @@ global {
 	float through_bike_share <- 0.0;       // udział rowerzystów wśród przechodzących
 	float speed_factor_run <- 1.0;         // mnożnik prędkości biegacza (ok. 2,3)
 	float speed_factor_bike <- 1.0;        // mnożnik prędkości rowerzysty (ok. 4)
+	float fatigue_factor_run <- 1.0;       // mnożnik zmęczenia na metr – biegacze (1 = jak pieszy)
+	float fatigue_factor_bike <- 1.0;      // mnożnik zmęczenia na metr – rowerzyści (1 = jak pieszy)
+	bool fast_regular_only <- false;       // true = biegacze/rowerzyści tylko wśród profilu regular
 	string fast_play <- "play";            // "play" = grają jak wszyscy; "skip" = nie grają, a pieszy, który ich wylosuje,
 	                                       // w tym cyklu nie gra; "exclude" = niewidoczni dla gry
 	bool run_loop <- false;                // biegacz: pętla przez 2–4 cele bez postoju zamiast przejścia na wprost
@@ -771,8 +774,14 @@ global {
 				ask player where each.through {
 					float u <- rnd(1.0);
 					travel_mode <- u < through_run_share ? "run" : (u < through_run_share + through_bike_share ? "bike" : "walk");
+					if fast_regular_only and (frail or aided) { travel_mode <- "walk"; }   // starsi nie biegają ani nie jeżdżą
 					speed_factor <- speed_factor * (travel_mode = "run" ? speed_factor_run : (travel_mode = "bike" ? speed_factor_bike : 1.0));
 					move_speed <- player_speed * speed_factor;
+					float kf <- travel_mode = "run" ? fatigue_factor_run : (travel_mode = "bike" ? fatigue_factor_bike : 1.0);
+					if kf != 1.0 {                // zmęczenie na metr dla szybkiego trybu
+						fatigue <- fatigue * kf;
+						if arrival_energy = "distance" and energy > 0.0 { energy <- max(0.0, min(1.0, 1.0 - kf * (1.0 - energy))); }
+					}
 				}
 			}
 			do compute_opposite();
@@ -971,6 +980,7 @@ global {
 			or dest_dwell_factor_frail <= 0 or dest_dwell_factor_aided <= 0 {
 			error "mnożniki prędkości i pobytu muszą być > 0";
 		}
+		if fatigue_factor_run < 0 or fatigue_factor_bike < 0 { error "mnożniki zmęczenia muszą być >= 0"; }
 		if !(fast_play in ["play", "skip", "exclude"]) { error "fast_play: play / skip / exclude, nie " + fast_play; }
 		if !(arrival_energy in ["uniform", "distance"]) { error "arrival_energy: uniform / distance, nie " + arrival_energy; }
 		if arrival_transit_share < 0 or arrival_transit_share > 1 or arrival_dist_mean < 0 or arrival_transit_dist < 0 {
